@@ -179,12 +179,18 @@ export function UnifiedBankWizard({ open, onOpenChange, onDone, prefill }: Props
             autoComplete="off" autoCorrect="off" spellCheck={false} name="obs-banco-nofill"
             placeholder="Observación (ej: pago proveedor, le transferí a Norberto…)"
             className="w-full glass-strong rounded-2xl px-5 py-4 text-base outline-none focus:ring-2 focus:ring-primary/40" />
-          <div>
-            <label className="text-xs text-muted-foreground font-medium">Fecha</label>
-            <input type="date" value={txDate} max={todayBogota()}
-              onChange={e => setTxDate(e.target.value)}
-              className="w-full mt-1 glass rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/30" />
-          </div>
+          {pairWith ? (
+            <div className="rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+              📅 Esta contraparte se registrará en la <strong className="text-foreground">misma fecha del movimiento original</strong> para que el par cuadre en su día (no en la fecha de hoy).
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs text-muted-foreground font-medium">Fecha</label>
+              <input type="date" value={txDate} max={todayBogota()}
+                onChange={e => setTxDate(e.target.value)}
+                className="w-full mt-1 glass rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-primary/30" />
+            </div>
+          )}
           {!pairWith && (
             <div>
               <label className="text-xs text-muted-foreground font-medium">¿Tiene contraparte?</label>
@@ -216,7 +222,7 @@ export function UnifiedBankWizard({ open, onOpenChange, onDone, prefill }: Props
             <Row label="Tipo" value={type === "ingreso" ? "📥 Ingreso" : "📤 Salida"} />
             <Row label="Medio" value={medium === "cash" ? "💵 Efectivo" : medium === "mixed" ? "💵+🏦 Mixto" : "🏦 Transferencia"} />
             {description && <Row label="Observación" value={description} />}
-            <Row label="Fecha" value={new Date(txDate + "T12:00:00").toLocaleDateString("es-CO", { day: "2-digit", month: "long", year: "numeric" })} />
+            <Row label="Fecha" value={pairWith ? "Misma del movimiento original" : new Date(txDate + "T12:00:00").toLocaleDateString("es-CO", { day: "2-digit", month: "long", year: "numeric" })} />
             <hr className="border-border" />
             {isMixed && <Row label="💵 Efectivo" value={formatCOP(cashPart)} />}
             {isMixed && <Row label="🏦 Transferencia" value={formatCOP(bankPart)} />}

@@ -107,6 +107,24 @@ export async function payBase(driverId: string, input: { cashAmount?: number; ba
   const amount = (cashAmount + bankAmount) || Math.round(input.amount ?? 0);
   if (amount <= 0) throw badRequest("El monto debe ser mayor a 0");
 
+  // Un "pago de base" es la DEVOLUCIÓN de una base prestada: solo tiene sentido si el
+  // domiciliario efectivamente debe base. Sin esta guarda se podían registrar pagos de
+  // base a alguien que no debía ninguna, dejando el saldo de bases (entregas − pagos)
+  // NEGATIVO —un "crédito de base" fantasma que descuadra el módulo de Bases y, vía
+  // applyDebtDelta, la deuda del domiciliario. La base pendiente se mide sobre TODO el
+  // historial (no solo el día visible), igual que en registerPayment/applyBankToDriver.
+  const [givenAgg, paidAgg] = await Promise.all([
+    prisma.baseTransaction.aggregate({ where: { driverId, type: "entrega" }, _sum: { amount: true } }),
+    prisma.baseTransaction.aggregate({ where: { driverId, type: "pago" }, _sum: { amount: true } }),
+  ]);
+  const basePending = Math.max(0, (givenAgg._sum.amount ?? 0) - (paidAgg._sum.amount ?? 0));
+  if (basePending <= 0) {
+    throw badRequest("Este domiciliario no tiene base pendiente por devolver, así que no se puede registrar un pago de base.");
+  }
+  if (amount > basePending) {
+    throw badRequest(`El pago de base ($${amount.toLocaleString("es-CO")}) supera la base pendiente ($${basePending.toLocaleString("es-CO")}). Ajusta el monto: no se puede devolver más base de la que se debe.`);
+  }
+
   const tx = await prisma.$transaction(async (txc) => {
     const created = await txc.baseTransaction.create({
       data: { driverId, branchId: driver.branchId, amount, cashAmount, bankAmount, type: "pago", notes: input.notes, createdBy: input.createdBy ?? null, createdByName: input.createdByName ?? null },

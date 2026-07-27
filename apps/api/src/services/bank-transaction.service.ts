@@ -58,10 +58,19 @@ export async function create(data: {
 
   // Enlace explícito de contraparte: comparten un pairId. Así, salida ↔ retorno se
   // cuadran sin depender de coincidencias de monto.
+  //
+  // FECHA DE LA CONTRAPARTE: se fija SIEMPRE en el día del movimiento ORIGINAL, no en
+  // "hoy". Un par entrada↔salida es plata de paso que neta a cero; si la contraparte
+  // cae en otro día que el original, en la vista de un solo día nunca se ven juntos y
+  // AMBOS quedan pintados como "esperando contraparte" para siempre (bug reportado: dos
+  // movimientos —75.000 y 100.000— cuadrados pero en días distintos). Heredar la fecha
+  // del original hace que el par cuadre en su día. Es neutro para el saldo del período
+  // (neto cero y el ancla del saldo esperado es el cierre mensual, no el día).
   let pairId: string | undefined;
   if (data.pairWith) {
     const original = await prisma.bankTransaction.findUnique({ where: { id: data.pairWith } });
     if (original) {
+      when = original.date; // ← la contraparte se fecha en el día del original
       pairId = original.pairId ?? `pair_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       if (!original.pairId) {
         // Marcar también la(s) fila(s) del original (puede ser mixto con groupId).
@@ -165,6 +174,19 @@ export async function remove(id: string) {
       await tx.bankTransaction.deleteMany({ where: { groupId: original.groupId } });
     } else {
       await tx.bankTransaction.delete({ where: { id } });
+    }
+
+    // Si lo borrado era una mitad de un par (contraparte), la mitad que sobrevive debe
+    // dejar de verse como "cuadrada": se le quita el pairId para que vuelva a marcarse
+    // como "falta contraparte". Sin esto quedaría un pairId colgante que la pintaría en
+    // verde (cuadrada) sin tener pareja real.
+    const pairIds = [...new Set(rows.map((r) => r.pairId).filter((p): p is string => !!p))];
+    if (pairIds.length) {
+      const deletedIds = rows.map((r) => r.id);
+      await tx.bankTransaction.updateMany({
+        where: { pairId: { in: pairIds }, id: { notIn: deletedIds } },
+        data: { pairId: null },
+      });
     }
   });
 }

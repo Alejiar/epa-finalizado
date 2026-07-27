@@ -123,6 +123,20 @@ export default function BancoPage() {
     } catch (err) { toast.error(String(err)); }
   }
 
+  // "Eliminar par" borra AMBAS mitades (salida + su contraparte). Antes solo borraba el
+  // egreso y dejaba la contraparte huérfana (pintada como "falta contraparte" para siempre).
+  async function removePair(ingreso: UnifiedBankMovement, egreso: UnifiedBankMovement) {
+    if (!isAdmin) { setDeleteReq(egreso); return; } // no admin → solicitud (la revisa el admin)
+    if (!confirm("¿Eliminar el par completo? Se borran la salida y su contraparte.")) return;
+    const del = (m: UnifiedBankMovement) => (m.source === "bank" ? api.deleteBankTransaction(m.id) : api.deleteConversion(m.id));
+    try {
+      await del(egreso);
+      await del(ingreso);
+      toast.success("Par eliminado");
+      load();
+    } catch (err) { toast.error(String(err)); }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -180,7 +194,7 @@ export default function BancoPage() {
                     <MovHalf mov={egreso} />
                     <span className="text-muted-foreground text-lg shrink-0">⇄</span>
                     <MovHalf mov={ingreso} />
-                    <button onClick={() => { remove(egreso); }} className="p-1.5 rounded-lg hover:bg-secondary transition text-muted-foreground hover:text-destructive shrink-0" title="Eliminar par">
+                    <button onClick={() => { removePair(ingreso, egreso); }} className="p-1.5 rounded-lg hover:bg-secondary transition text-muted-foreground hover:text-destructive shrink-0" title="Eliminar par">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>

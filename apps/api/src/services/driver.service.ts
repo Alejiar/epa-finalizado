@@ -42,9 +42,20 @@ function formatCOP(n: number): string {
 }
 
 export async function listDrivers(branchId?: string) {
-  const where = branchId ? { branchId } : {};
   return prisma.driver.findMany({
-    where,
+    where: {
+      ...(branchId ? { branchId } : {}),
+      // Ocultar del roster a los domiciliarios INACTIVOS YA SALDADOS (los borrados en
+      // Shipday que la reconciliación desactivó, sin deuda ni crédito). Su historial
+      // (pedidos, pagos, stats) queda intacto en la BD para reportes; solo desaparecen
+      // de la lista y de los selectores. Los inactivos que AÚN deban o se les deba SÍ se
+      // muestran, para poder cobrarles/pagarles; al saldar quedan ocultos también.
+      OR: [
+        { active: true },
+        { pendingDebt: { gt: 0 } },
+        { creditAmount: { gt: 0 } },
+      ],
+    },
     include: { branch: { select: { id: true, name: true } } },
     orderBy: { name: "asc" },
   });

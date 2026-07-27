@@ -145,7 +145,9 @@ export async function syncBranch(id: string, opts: SyncOptions = {}): Promise<{ 
     const driversStale = opts.forceDrivers || Date.now() - (lastDriverSyncAt.get(id) ?? 0) > DRIVER_SYNC_TTL_MS;
     if (driversStale) {
       const shipdayDrivers = await shipday.getDrivers(apiKey);
+      const seenShipdayIds = new Set<string>();
       for (const sd of shipdayDrivers) {
+        seenShipdayIds.add(String(sd.id));
         await prisma.driver.upsert({
           where: { shipdayDriverId_branchId: { shipdayDriverId: String(sd.id), branchId: id } },
           create: {
@@ -164,6 +166,14 @@ export async function syncBranch(id: string, opts: SyncOptions = {}): Promise<{ 
           },
         });
         driversCount++;
+      }
+      // Reconciliar ELIMINACIONES: un domiciliario borrado en Shipday desaparece por
+      // completo de /carriers (uno solo desactivado sigue apareciendo con isActive=false
+      // y ya lo maneja el upsert de arriba). GUARDA anti-glitch: solo reconciliar si
+      // Shipday devolvió al menos un domiciliario. Una lista vacía puede ser un fallo
+      // transitorio de la API; borrar/inactivar a TODA la nómina por eso sería catastrófico.
+      if (seenShipdayIds.size > 0) {
+        await reconcileDeletedDrivers(id, seenShipdayIds);
       }
       lastDriverSyncAt.set(id, Date.now());
     }
@@ -223,6 +233,53 @@ export async function syncBranch(id: string, opts: SyncOptions = {}): Promise<{ 
   }
 
   return { drivers: driversCount, orders: ordersCount };
+}
+
+/**
+ * Reconcilia los domiciliarios que YA NO existen en Shipday (borrados allá) contra la
+ * base local. Regla (elegida por el dueño — opción "inteligente"):
+ *   - Sin ningún rastro de dinero/historial (deuda, crédito, pedidos, bases, pagos,
+ *     stats) → se BORRA del sistema: desaparece por completo, no deja basura.
+ *   - Con deuda, crédito o historial → se INACTIVA (active=false), NUNCA se borra:
+ *     borrar a alguien que debe (o a quien se le debe) plata borraría ese registro y
+ *     dejaría un agujero contable. Inactivo sigue visible en "Deudas" y en la lista
+ *     (marcado "Inactivo") para poder cobrar/pagar.
+ * `shipdayIds` = ids de Shipday presentes en la última respuesta de /carriers.
+ */
+async function reconcileDeletedDrivers(branchId: string, shipdayIds: Set<string>): Promise<void> {
+  const locals = await prisma.driver.findMany({
+    where: { branchId },
+    select: { id: true, shipdayDriverId: true, active: true, pendingDebt: true, creditAmount: true },
+  });
+  for (const d of locals) {
+    if (shipdayIds.has(d.shipdayDriverId)) continue; // sigue existiendo en Shipday
+
+    // ¿Tiene deuda/crédito o cualquier historial que debamos conservar?
+    let hasFootprint = d.pendingDebt > 0 || (d.creditAmount ?? 0) > 0;
+    if (!hasFootprint) {
+      const [orders, bases, payments, stats, bankTxs] = await Promise.all([
+        prisma.shipdayOrder.count({ where: { driverId: d.id } }),
+        prisma.baseTransaction.count({ where: { driverId: d.id } }),
+        prisma.driverPayment.count({ where: { driverId: d.id } }),
+        prisma.dailyDriverStat.count({ where: { driverId: d.id } }),
+        // BankTransaction referencia al domiciliario solo por trazabilidad (sin FK), pero
+        // si aparece en algún movimiento de banco preferimos conservarlo (inactivar) antes
+        // que borrarlo y dejar un driverId colgante.
+        prisma.bankTransaction.count({ where: { driverId: d.id } }),
+      ]);
+      hasFootprint = orders > 0 || bases > 0 || payments > 0 || stats > 0 || bankTxs > 0;
+    }
+
+    if (hasFootprint) {
+      // Conservar: solo inactivar si aún estaba activo (evita escrituras redundantes).
+      if (d.active) {
+        await prisma.driver.update({ where: { id: d.id }, data: { active: false } });
+      }
+    } else {
+      // Sin rastro alguno → seguro de borrar (no hay dinero ni historial que perder).
+      await prisma.driver.delete({ where: { id: d.id } });
+    }
+  }
 }
 
 interface DeliveredPayload {
