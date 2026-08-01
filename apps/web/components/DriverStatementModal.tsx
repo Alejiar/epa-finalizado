@@ -32,8 +32,12 @@ export function DriverStatementModal({ driver, onClose, onRefresh, debtCycle }: 
 
   useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [driver.id]);
 
-  const basePending = statement ? Math.max(0, statement.totalBasesGiven - statement.totalBasesPaid) : 0;
   const totalOwed = statement?.pendingDebt ?? 0;
+  // Base pendiente CONCILIADA con la deuda neta (min(entrega−pago, deuda)): el residuo bruto del
+  // libro de base puede sobrevalorar la base de un domiciliario ya saldado. Misma regla que el
+  // backend (apps/api/src/lib/base-balance.ts) para que este estado de cuenta coincida con Bases,
+  // Deudas, Domiciliarios y Reportes. Nunca puede superar lo que realmente debe (totalOwed).
+  const basePending = statement ? Math.max(0, Math.min(statement.totalBasesGiven - statement.totalBasesPaid, totalOwed)) : 0;
   const companyOwes = statement?.creditAmount ?? 0;
 
   // En modo Deudas: solo los domicilios de la deuda actual (entregados DESPUÉS del último

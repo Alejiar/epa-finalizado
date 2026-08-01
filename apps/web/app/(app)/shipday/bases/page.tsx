@@ -114,11 +114,34 @@ export default function BasesPage() {
     else { g.paid += b.amount; g.paidCash += cash; g.paidBank += bank; }
     groupMap.set(b.driverId, g);
   }
+  // ESTADO de base por domiciliario = base pendiente CONCILIADA con su deuda neta, calculada en
+  // el backend (listDrivers.basePending, FUENTE ÚNICA — ver apps/api/src/lib/base-balance.ts).
+  // NO se usa el saldo entrega−pago del día: ese libro es un registro paralelo que puede quedar
+  // por encima de lo que el domiciliario realmente debe (parte de un pago se aplica a comisión y
+  // la deuda tiene piso en 0). Un domiciliario ya saldado (deuda neta 0) NO debe base. Así el
+  // estado en Bases coincide SIEMPRE con Deudas, Domiciliarios y Reportes.
+  const basePendingByDriver = new Map(drivers.map(d => [d.id, d.basePending ?? 0]));
+  // "Devuelto / saldado" del día = de lo que se le entregó, cuánto YA NO debe. Incluye lo devuelto
+  // en efectivo/transferencia (g.paid) MÁS lo saldado con su saldo a favor (crédito), de modo que
+  //   Entregado − Devuelto/saldado = Pendiente (conciliado con la deuda).
+  // Nunca por debajo de lo realmente devuelto (g.paid) ni por encima de lo entregado (g.given).
+  // Ej. Andrés: entregó 300.000, devolvió 234.600 + 65.400 con saldo a favor → saldado 300.000, al día.
+  const settledOf = (given: number, paid: number, driverId: string) => {
+    const basePending = basePendingByDriver.get(driverId) ?? 0;
+    return Math.min(given, Math.max(paid, given - basePending));
+  };
   const driverGroups = [...groupMap.values()]
-    .map(g => ({ ...g, balance: g.given - g.paid }))
+    .map(g => {
+      const balance = basePendingByDriver.get(g.driverId) ?? 0;
+      const settled = settledOf(g.given, g.paid, g.driverId);
+      return { ...g, balance, settled, creditSettled: Math.max(0, settled - g.paid) };
+    })
     .filter(g => !search.trim() || g.name.toLowerCase().includes(search.toLowerCase()))
     // Primero los que deben (rojo), luego cuadrados; dentro, mayor saldo primero y alfabético como criterio final
     .sort((a, b) => (b.balance - a.balance) || a.name.localeCompare(b.name, "es"));
+
+  // Totales del día para las tarjetas de arriba, con el mismo criterio conciliado.
+  const totalSettled = [...groupMap.values()].reduce((s, g) => s + settledOf(g.given, g.paid, g.driverId), 0);
 
   return (
     <div className="space-y-6">
@@ -154,12 +177,15 @@ export default function BasesPage() {
           <p className="font-black text-xl tnum text-orange-500 mt-1">{formatCOP(totalGiven)}</p>
         </div>
         <div className="glass-strong rounded-2xl p-4">
-          <p className="text-xs text-muted-foreground">Pagado {isToday ? "hoy" : "ese día"}</p>
-          <p className="font-black text-xl tnum text-green-600 mt-1">{formatCOP(totalPaid)}</p>
+          <p className="text-xs text-muted-foreground">Devuelto / saldado {isToday ? "hoy" : "ese día"}</p>
+          <p className="font-black text-xl tnum text-green-600 mt-1">{formatCOP(totalSettled)}</p>
+          {totalSettled > totalPaid && (
+            <p className="text-[11px] text-muted-foreground mt-0.5">Devuelto {formatCOP(totalPaid)} + {formatCOP(totalSettled - totalPaid)} con saldo a favor</p>
+          )}
         </div>
         <div className="glass-strong rounded-2xl p-4">
-          <p className="text-xs text-muted-foreground">Saldo neto {isToday ? "hoy" : "ese día"}</p>
-          <p className={`font-black text-xl tnum mt-1 ${totalGiven - totalPaid > 0 ? "text-red-500" : "text-muted-foreground"}`}>{formatCOP(totalGiven - totalPaid)}</p>
+          <p className="text-xs text-muted-foreground">Base sin devolver (conciliada)</p>
+          <p className={`font-black text-xl tnum mt-1 ${totalGiven - totalSettled > 0 ? "text-red-500" : "text-muted-foreground"}`}>{formatCOP(totalGiven - totalSettled)}</p>
         </div>
       </div>
 
@@ -199,21 +225,26 @@ export default function BasesPage() {
                       </button>
                     )}
                     <span className={`font-black text-lg tnum ${debe ? "text-red-500" : "text-green-600"}`}>
-                      {debe ? `Debe ${formatCOP(g.balance)}` : "Saldo $0"}
+                      {debe ? `Debe ${formatCOP(g.balance)}` : "Base al día"}
                     </span>
                   </div>
                 </div>
-                {/* Entregas (salió) y devoluciones (volvió) juntas */}
+                {/* Estado (Debe/Al día) = base TOTAL conciliada con su deuda (fuente única), no la
+                    resta cruda del día. Los recuadros muestran el movimiento del día ya conciliado:
+                    "Devuelto / saldado" incluye lo devuelto en efectivo/banco MÁS lo saldado con su
+                    saldo a favor, para que Entregado − Devuelto = lo que realmente debe. */}
                 <div className="grid grid-cols-2 gap-2 mt-3">
                   <div className="rounded-xl bg-background/50 px-3 py-2">
-                    <div className="text-xs font-bold text-orange-600">📤 Entregado (base prestada)</div>
+                    <div className="text-xs font-bold text-orange-600">📤 Entregado {isToday ? "hoy" : "ese día"}</div>
                     <div className="font-black tnum text-orange-600 mt-0.5">−{formatCOP(g.given)}</div>
                     <div className="text-[11px] text-muted-foreground">💵 {formatCOP(g.givenCash)} · 🏦 {formatCOP(g.givenBank)}</div>
                   </div>
                   <div className="rounded-xl bg-background/50 px-3 py-2">
-                    <div className="text-xs font-bold text-green-600">📥 Devuelto</div>
-                    <div className="font-black tnum text-green-600 mt-0.5">+{formatCOP(g.paid)}</div>
-                    <div className="text-[11px] text-muted-foreground">💵 {formatCOP(g.paidCash)} · 🏦 {formatCOP(g.paidBank)}</div>
+                    <div className="text-xs font-bold text-green-600">📥 Devuelto / saldado {isToday ? "hoy" : "ese día"}</div>
+                    <div className="font-black tnum text-green-600 mt-0.5">+{formatCOP(g.settled)}</div>
+                    {g.creditSettled > 0
+                      ? <div className="text-[11px] text-muted-foreground">Devuelto {formatCOP(g.paid)} + {formatCOP(g.creditSettled)} con saldo a favor</div>
+                      : <div className="text-[11px] text-muted-foreground">💵 {formatCOP(g.paidCash)} · 🏦 {formatCOP(g.paidBank)}</div>}
                   </div>
                 </div>
                 {/* Movimientos individuales con editar / eliminar */}

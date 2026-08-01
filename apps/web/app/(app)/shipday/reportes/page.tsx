@@ -6,7 +6,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import * as api from "@/lib/sd-api";
 import type { Branch, MonthlyClose, MonthlyReport } from "@/lib/sd-api";
-import { formatCOP } from "@/lib/format";
+import { formatCOP, todayBogota } from "@/lib/format";
 import { MonthlyCloseWizard } from "@/components/wizards/MonthlyCloseWizard";
 import { useLive } from "@/lib/use-live";
 
@@ -17,7 +17,9 @@ export default function ReportesPage() {
   const [loading, setLoading] = useState(true);
   const [showClose, setShowClose] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
-  const [reportMonth, setReportMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  // Mes por defecto en zona Bogotá (NO UTC): en la noche del último día del mes, el UTC ya
+  // marca el mes siguiente (vacío) y el Excel salía en ceros aunque el mes en curso tuviera datos.
+  const [reportMonth, setReportMonth] = useState(() => todayBogota().slice(0, 7));
   const [report, setReport] = useState<MonthlyReport | null>(null);
 
   const load = async (silent = false) => {
@@ -60,10 +62,13 @@ export default function ReportesPage() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => handleExport(new Date().toISOString().slice(0, 7), branchId || undefined)}
-            className="flex items-center gap-2 px-3 py-2 border border-border rounded-xl text-sm font-bold hover:bg-secondary transition"
+            onClick={() => handleExport(reportMonth, branchId || undefined)}
+            disabled={downloading === reportMonth + (branchId || "global")}
+            className="flex items-center gap-2 px-3 py-2 border border-border rounded-xl text-sm font-bold hover:bg-secondary transition disabled:opacity-50"
           >
-            <Download className="h-4 w-4" /> Excel este mes
+            {/* Exporta el MES SELECCIONADO abajo (no un "mes actual" recalculado): así el Excel
+                coincide siempre con el reporte que se ve en pantalla. */}
+            <Download className="h-4 w-4" /> {downloading === reportMonth + (branchId || "global") ? "Generando..." : `Excel de ${reportMonth}`}
           </button>
           <button
             onClick={() => setShowClose(true)}
@@ -122,8 +127,10 @@ export default function ReportesPage() {
                 <CloseMetric label="Valor total" value={formatCOP(c.totalValue)} />
                 <CloseMetric label="% empresa" value={formatCOP(c.companyTotal)} highlight />
                 <CloseMetric label="Bases dadas" value={formatCOP(c.basesGiven)} />
-                <CloseMetric label="Bases pagadas" value={formatCOP(c.basesPaid)} />
-                <CloseMetric label="Bases pendientes" value={formatCOP(c.basesPending)} warn={c.basesPending > 0} />
+                {/* Devueltas/saldadas = entregadas − sin devolver (incluye base saldada con crédito),
+                    para que cuadre con "Base sin devolver" conciliada. Ver módulo de Bases. */}
+                <CloseMetric label="Bases devueltas/saldadas" value={formatCOP(c.basesGiven - c.basesPending)} />
+                <CloseMetric label="Base sin devolver" value={formatCOP(c.basesPending)} warn={c.basesPending > 0} />
               </div>
 
               <button
@@ -177,7 +184,7 @@ function MonthlyReportPanel({ report }: { report: MonthlyReport }) {
           label="Diferencia Bases"
           ok={report.bases.ok}
           value={report.bases.diff}
-          detail={!report.bases.ok ? `Entregadas ${fmt(report.bases.given)} − Devueltas ${fmt(report.bases.returned)}` : undefined}
+          detail={!report.bases.ok ? `Base aún en poder de domiciliarios (conciliada con su deuda). En el mes: entregadas ${fmt(report.bases.given)} · devueltas ${fmt(report.bases.returned)}` : undefined}
           items={report.bases.pendingDrivers.map(d => ({ id: d.id, label: d.name, amount: d.pendingDebt }))}
           linkHref="/shipday/bases"
           linkLabel="Ir a Bases →"

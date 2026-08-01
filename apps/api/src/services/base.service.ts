@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma";
 import { notFound, badRequest } from "../lib/errors";
 import { applyDebtDelta } from "./driver.service";
 import { bogotaOpenRange } from "../lib/date-range";
+import { reconcileBasePending } from "../lib/base-balance";
 
 // Eliminar una base (admin directo): revierte el efecto en la deuda del domiciliario.
 // Usa applyDebtDelta (netea contra el crédito y nunca deja pendingDebt negativo) en
@@ -148,5 +149,7 @@ export async function getBaseSummary(driverId: string) {
   const given = bases.filter(b => b.type === "entrega").reduce((s, b) => s + b.amount, 0);
   const paid = bases.filter(b => b.type === "pago").reduce((s, b) => s + b.amount, 0);
 
-  return { given, paid, pending: given - paid, history: bases };
+  // Base pendiente CONCILIADA con la deuda neta (ver lib/base-balance): el residuo bruto
+  // given−paid puede sobrevalorar la base de un domiciliario ya saldado.
+  return { given, paid, pending: reconcileBasePending(given - paid, driver.pendingDebt), history: bases };
 }

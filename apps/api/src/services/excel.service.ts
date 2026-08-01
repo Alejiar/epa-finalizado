@@ -11,12 +11,11 @@ function cop(n: number) {
  * Construye la hoja "CIERRE MES" replicando la estructura del Excel manual de la empresa,
  * pero con los datos reales del sistema (getMonthlyReport + desglose por categoría).
  */
-async function buildCierreMesSheet(wb: ExcelJS.Workbook, month: string, branchId?: string) {
+async function buildCierreMesSheet(wb: ExcelJS.Workbook, month: string, report: Awaited<ReturnType<typeof getMonthlyReport>>, branchId?: string) {
   const range = monthRange(month);
   const monthPrefix = month;
 
-  const [report, gEf, gBk, nEf, nBk, baseGiven, basePaid, bankIn, bankOut] = await Promise.all([
-    getMonthlyReport(month, branchId),
+  const [gEf, gBk, nEf, nBk, baseGiven, basePaid, bankIn, bankOut] = await Promise.all([
     prisma.movement.aggregate({ where: { category: 3, status: "confirmed", date: { startsWith: monthPrefix } }, _sum: { amount: true } }),
     prisma.movement.aggregate({ where: { category: 4, status: "confirmed", date: { startsWith: monthPrefix } }, _sum: { amount: true } }),
     prisma.movement.aggregate({ where: { category: 15, status: "confirmed", date: { startsWith: monthPrefix } }, _sum: { amount: true } }),
@@ -147,12 +146,17 @@ export async function buildMonthlyExcel(month: string, branchId?: string): Promi
     }),
   ]);
 
+  // Reporte del mes (misma fuente que la pantalla de Reportes) — se calcula una sola vez y
+  // se reutiliza para la hoja CIERRE MES y para "Bases pendientes" del Resumen, de modo que
+  // TODAS las cifras del Excel coincidan con lo que muestra el sistema.
+  const report = await getMonthlyReport(month, branchId);
+
   const wb = new ExcelJS.Workbook();
   wb.creator = "Cash Buddy EPA";
   wb.created = new Date();
 
   // Hoja principal con la estructura "CIERRE MES" (igual al Excel manual)
-  await buildCierreMesSheet(wb, month, branchId);
+  await buildCierreMesSheet(wb, month, report, branchId);
 
   const headerStyle: Partial<ExcelJS.Style> = {
     font: { bold: true, color: { argb: "FFFFFFFF" } },
@@ -182,7 +186,10 @@ export async function buildMonthlyExcel(month: string, branchId?: string): Promi
     ["Total porcentaje empresa (30%)", cop(totalCompany)],
     ["Bases entregadas", cop(basesGiven)],
     ["Bases pagadas", cop(basesPaid)],
-    ["Bases pendientes", cop(basesGiven - basesPaid)],
+    // Base realmente sin devolver, conciliada con la deuda neta de cada domiciliario (misma
+    // cifra que el indicador "Diferencia Bases"). NO es entregadas − pagadas: un domiciliario
+    // ya saldado no debe base aunque su libro muestre residuo.
+    ["Bases sin devolver (conciliado)", cop(report.bases.diff)],
     ["Conversiones banco→efectivo", cop(convB2E)],
     ["Conversiones efectivo→banco", cop(convE2B)],
   ].forEach(([c, v]) => summary.addRow({ concept: c, value: v }));

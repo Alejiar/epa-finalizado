@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { conflict } from "../lib/errors";
 import { bogotaMonthRange as monthRange } from "../lib/date-range";
+import { reconcileBasePending } from "../lib/base-balance";
 
 /**
  * Reporte mensual con la lógica del Excel.
@@ -56,13 +57,28 @@ export async function getMonthlyReport(month: string, branchId?: string) {
     baseBalanceByDriver.set(row.driverId, cur + (row.type === "entrega" ? amt : -amt));
   }
   const driverIdsWithBase = [...baseBalanceByDriver.entries()].filter(([, bal]) => bal > 0).map(([id]) => id);
-  const driverNames = driverIdsWithBase.length
-    ? await prisma.driver.findMany({ where: { id: { in: driverIdsWithBase } }, select: { id: true, name: true } })
+  // RECONCILIAR el libro de base contra la posición NETA autoritativa del domiciliario.
+  // El saldo de base (entrega − pago) es un registro paralelo que puede quedar POR ENCIMA
+  // de la deuda neta real: los pagos se reparten entre base y comisión y la deuda tiene
+  // piso en 0, así que un domiciliario ya saldado puede conservar un residuo de base en el
+  // libro (deriva, no base real). La verdad única es la posición neta (pendingDebt): quien
+  // no debe nada NO debe base. Mostramos min(saldoBase, deudaNeta) para que Bases y
+  // Reportes cuadren con Deudas/Domiciliarios (mismo criterio que ya usa la comisión abajo).
+  const baseDriverRows = driverIdsWithBase.length
+    ? await prisma.driver.findMany({ where: { id: { in: driverIdsWithBase } }, select: { id: true, name: true, pendingDebt: true } })
     : [];
-  const pendingBaseDrivers = driverNames
-    .map(d => ({ id: d.id, name: d.name, pendingDebt: baseBalanceByDriver.get(d.id) ?? 0 }))
+  const reconciledBaseByDriver = new Map<string, number>();
+  for (const d of baseDriverRows) {
+    reconciledBaseByDriver.set(d.id, reconcileBasePending(baseBalanceByDriver.get(d.id) ?? 0, d.pendingDebt));
+  }
+  const pendingBaseDrivers = baseDriverRows
+    .map(d => ({ id: d.id, name: d.name, pendingDebt: reconciledBaseByDriver.get(d.id) ?? 0 }))
+    .filter(d => d.pendingDebt > 0)
     .sort((a, b) => b.pendingDebt - a.pendingDebt)
     .slice(0, 20);
+  // Total de base realmente sin devolver (conciliado con la deuda neta), NO el residuo del
+  // libro. Es el número que deben mostrar el indicador "Diferencia Bases" y el Excel.
+  const basePendingReconciled = [...reconciledBaseByDriver.values()].reduce((s, v) => s + v, 0);
 
   // COMISIONES: deuda del domiciliario que NO es base (la comisión que deben por domicilios)
   const driversWithDebt = await prisma.driver.findMany({
@@ -102,7 +118,10 @@ export async function getMonthlyReport(month: string, branchId?: string) {
   const totalSales = ventasAgg._sum.companyAmount ?? 0;
   const totalExpenses = gastosEf + gastosBk;
   const totalPayroll = nominaEf + nominaBk;
-  const basesDiff = basesGiven - basesPaid;          // esperado 0
+  // Diferencia de bases = base realmente sin devolver, conciliada con la deuda neta de cada
+  // domiciliario (NO el residuo bruto entrega−pago del libro, que puede sobrevalorar la base
+  // de un domiciliario ya saldado). Así el indicador cuadra con la lista pendingDrivers.
+  const basesDiff = basePendingReconciled;           // esperado 0
   const transferDiff = bankIng - bankEgr;            // esperado 0
   const clientDebtBalance = debtsGen - debtsPaid;    // esperado 0
   const netProfit = totalSales - totalExpenses - totalPayroll;
@@ -264,6 +283,10 @@ export async function closeMonth(month: string, branchId?: string, initialCash?:
     });
   }
 
+  // Base sin devolver del mes, conciliada con la deuda neta (no el residuo bruto entrega−pago,
+  // que puede ser base ya saldada con crédito/comisión). Misma lógica que usa la tarjeta al leer.
+  const basesPendingReconciled = await getMonthBasePendingReconciled(month, branchId ?? null);
+
   return prisma.monthlyClose.create({
     data: {
       branchId: branchId ?? null,
@@ -273,7 +296,7 @@ export async function closeMonth(month: string, branchId?: string, initialCash?:
       companyTotal,
       basesGiven,
       basesPaid,
-      basesPending: basesGiven - basesPaid,
+      basesPending: basesPendingReconciled,
       conversions: conversionsSummary,
       snapshot,
       ...(initialCash != null ? { initialCash } : {}),
@@ -291,13 +314,45 @@ export async function closeMonth(month: string, branchId?: string, initialCash?:
   });
 }
 
+/**
+ * Base REALMENTE sin devolver de un mes, CONCILIADA con la deuda neta de cada domiciliario.
+ * Toma el libro de base del mes (entrega − pago por domiciliario) y lo acota a su deuda neta
+ * actual: si un domiciliario ya está saldado (deuda 0), su residuo de base del mes NO cuenta
+ * (fue saldado con crédito/comisión). Reemplaza el "basesGiven − basesPaid" crudo que dejaba
+ * fantasmas como los $65.400 de Andrés en la tarjeta del cierre. Ver lib/base-balance.
+ */
+export async function getMonthBasePendingReconciled(month: string, branchId?: string | null): Promise<number> {
+  const range = monthRange(month);
+  const baseWhere = branchId ? { branchId, date: range } : { date: range };
+  const grp = await prisma.baseTransaction.groupBy({ by: ["driverId", "type"], _sum: { amount: true }, where: baseWhere });
+  const ledgerByDriver = new Map<string, number>();
+  for (const row of grp) {
+    const cur = ledgerByDriver.get(row.driverId) ?? 0;
+    ledgerByDriver.set(row.driverId, cur + (row.type === "entrega" ? (row._sum.amount ?? 0) : -(row._sum.amount ?? 0)));
+  }
+  const ids = [...ledgerByDriver.keys()];
+  if (!ids.length) return 0;
+  const drivers = await prisma.driver.findMany({ where: { id: { in: ids } }, select: { id: true, pendingDebt: true } });
+  const netById = new Map(drivers.map(d => [d.id, d.pendingDebt]));
+  let total = 0;
+  for (const [id, ledger] of ledgerByDriver) total += reconcileBasePending(ledger, netById.get(id) ?? 0);
+  return total;
+}
+
 export async function listCloses(branchId?: string) {
   const where = branchId ? { branchId } : {};
-  return prisma.monthlyClose.findMany({
+  const closes = await prisma.monthlyClose.findMany({
     where,
     include: { branch: { select: { id: true, name: true } } },
     orderBy: { month: "desc" },
   });
+  // "Bases pendientes" de cada cierre se RECALCULA conciliada al leer (no se usa el valor viejo
+  // guardado, que podía mostrar base ya saldada con crédito). Así la tarjeta nunca vuelve a
+  // enseñar un fantasma, incluso en cierres creados antes de este arreglo.
+  return Promise.all(closes.map(async c => ({
+    ...c,
+    basesPending: await getMonthBasePendingReconciled(c.month, c.branchId),
+  })));
 }
 
 export async function getClose(id: string) {

@@ -435,6 +435,9 @@ export interface Driver {
   pendingDebt: number;
   creditAmount: number;
   creditMedium?: string | null;
+  // Base pendiente CONCILIADA con la deuda neta (min(entrega−pago, pendingDebt)). Fuente única
+  // para el estado de base en el módulo de Bases; ver apps/api/src/lib/base-balance.ts.
+  basePending?: number;
   branch: { id: string; name: string };
   createdAt: string;
 }

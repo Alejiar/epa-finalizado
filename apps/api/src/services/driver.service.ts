@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma";
 import { badRequest, notFound } from "../lib/errors";
 import { bogotaDayRange, todayBogota } from "../lib/date-range";
 import { BANK_LINKED_PAYMENT_NOTE, bankLinkedBaseNote } from "../lib/balance-markers";
+import { reconcileBasePending } from "../lib/base-balance";
 
 /**
  * Aplica un cambio en la cuenta de un domiciliario manteniendo SIEMPRE el
@@ -42,7 +43,7 @@ function formatCOP(n: number): string {
 }
 
 export async function listDrivers(branchId?: string) {
-  return prisma.driver.findMany({
+  const drivers = await prisma.driver.findMany({
     where: {
       ...(branchId ? { branchId } : {}),
       // Ocultar del roster a los domiciliarios INACTIVOS YA SALDADOS (los borrados en
@@ -59,6 +60,27 @@ export async function listDrivers(branchId?: string) {
     include: { branch: { select: { id: true, name: true } } },
     orderBy: { name: "asc" },
   });
+
+  // Base pendiente CONCILIADA con la deuda neta, por domiciliario. Es la FUENTE ÚNICA que usa
+  // el módulo de Bases para el estado "Debe base / Cuadrado", de modo que coincida siempre con
+  // Deudas/Domiciliarios/Reportes (todos derivan de la posición neta). Ver lib/base-balance.
+  const ledger = drivers.length
+    ? await prisma.baseTransaction.groupBy({
+        by: ["driverId", "type"],
+        _sum: { amount: true },
+        where: { driverId: { in: drivers.map(d => d.id) } },
+      })
+    : [];
+  const ledgerByDriver = new Map<string, number>();
+  for (const row of ledger) {
+    const cur = ledgerByDriver.get(row.driverId) ?? 0;
+    const amt = row._sum.amount ?? 0;
+    ledgerByDriver.set(row.driverId, cur + (row.type === "entrega" ? amt : -amt));
+  }
+  return drivers.map(d => ({
+    ...d,
+    basePending: reconcileBasePending(ledgerByDriver.get(d.id) ?? 0, d.pendingDebt),
+  }));
 }
 
 export async function getDriverDetail(id: string) {
