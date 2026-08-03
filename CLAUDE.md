@@ -116,6 +116,42 @@ interna, marcados con notas especiales (`BANK_LINKED_PAYMENT_NOTE`,
   imposibles de rastrear. Con `Cascade`, si alguna ruta olvida la limpieza
   explícita, el descuadre es visible en vez de silencioso. No la cambies.
 
+## Pedidos de Shipday: el stub "$0 / #00" del webhook y su autosanación
+
+El webhook de Shipday (`ORDER_COMPLETED`) dispara en el **instante** en que el
+pedido se marca entregado, pero en ese momento Shipday **aún no fija la tarifa**:
+manda `delivery_fee: 0`, `total_cost: 0` y `order_number: "00"` (confirmado en el
+`rawData` real). El webhook guarda ese **stub**: `deliveryValue = 0`,
+`companyAmount = 0`, sin aplicar deuda ni estadística (exige `companyAmount > 0`).
+
+Después, la consulta de "ya entregados" (`POST /orders/query ALREADY_DELIVERED`,
+el *polling*) trae la **tarifa y el número reales**. Como persistir es idempotente
+por `shipdayOrderId`, **antes** ese stub se ignoraba y el pedido quedaba clavado en
+`$0 / #00` para siempre, **sin sumar a la deuda del domiciliario**. Esto producía
+**dos síntomas que son el mismo bug**: (1) pedidos con valor 0, y (2) "no cargaron
+todos" — porque el pedido está guardado como `#00` en vez de su número real, así que
+la numeración del día muestra **huecos** (falta el #80, #128…) aunque el pedido sí
+exista.
+
+- La corrección vive en `persistDeliveredOrder` (`branch.service.ts`): si el registro
+  existe **en 0** y el polling trae un valor **> 0**, se **sana una sola vez** — se
+  actualiza valor, comisión, número y datos del cliente, y se **cuenta por primera
+  vez** (deuda vía `applyDebtDelta` + `DailyDriverStat`), porque el stub en 0 nunca se
+  contó. La condición `deliveryValue === 0 && nuevo > 0` evita tocar pedidos ya
+  correctos o corregidos a mano (una edición vía `EditRequest` deja el valor > 0).
+- Se limita a pedidos creados a partir de `SELF_HEAL_SINCE` (fecha **fija** =
+  despliegue del arreglo, 03-ago-2026). Fue un pedido explícito del dueño: **no tocar
+  los pedidos viejos que ya quedaron en $0**, solo que de aquí en adelante se corrijan
+  solos. Fija (no "hoy dinámico") para que un stub creado justo antes de medianoche
+  también se sane al día siguiente.
+- El *fast sync* (~60 s, solo hoy) sana los stubs del día casi de inmediato; catch-up
+  (3 d) y reconciliación profunda (14 d) cubren los rezagados. Todos pasan por
+  `persistDeliveredOrder`, así que **no dupliques** esta lógica en otra ruta de carga.
+- El **stub es necesario**: da presencia en tiempo real y captura pedidos
+  **programados** creados hace días (que la ventana por fecha de CREACIÓN del polling
+  no alcanza). Por eso el webhook NO debe dejar de crear el pedido cuando la tarifa
+  llega en 0 — se crea y el polling lo sana.
+
 ## Cierre de caja: "día operativo" ≠ fecha calendario
 
 El día que se puede cerrar **no avanza solo porque cambió la fecha**. Solo

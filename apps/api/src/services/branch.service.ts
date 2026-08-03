@@ -15,6 +15,23 @@ const SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
 const DRIVER_SYNC_TTL_MS = 5 * 60 * 1000;
 const lastDriverSyncAt = new Map<string, number>();
 
+// ─── Autosanación de "pedidos fantasma con valor 0" ──────────────────────────
+// El webhook de Shipday (ORDER_COMPLETED) dispara en el instante en que el pedido
+// se marca entregado, pero en ese momento Shipday AÚN NO fija la tarifa: manda
+// `delivery_fee: 0`, `total_cost: 0` y `order_number: "00"`. El webhook guarda ese
+// stub con valor 0 (sin comisión ni conteo). Después, la consulta de "ya entregados"
+// (polling) SÍ trae la tarifa y el número reales — pero como persistir es idempotente
+// por `shipdayOrderId`, antes se ignoraba y el pedido quedaba clavado en $0/#00 para
+// siempre (y sin sumar a la deuda del domiciliario). Ahora el polling corrige ese stub
+// (ver `persistDeliveredOrder`).
+//
+// SELF_HEAL_SINCE limita la corrección a pedidos creados a partir del despliegue de
+// este arreglo. El dueño pidió expresamente NO tocar los pedidos viejos que ya quedaron
+// en $0; solo que de aquí en adelante se corrijan solos. Es una fecha FIJA (no "hoy
+// dinámico") para que un stub creado justo antes de medianoche también se sane al día
+// siguiente, y para que el corte "desde hoy" no se mueva con el paso de los días.
+const SELF_HEAL_SINCE = new Date("2026-08-03T00:00:00.000-05:00");
+
 async function getCachedCommission(): Promise<number> {
   const now = Date.now();
   if (_settingsCache && now - _settingsCacheAt < SETTINGS_CACHE_TTL_MS) {
@@ -295,7 +312,6 @@ interface DeliveredPayload {
 
 async function persistDeliveredOrder(branchId: string, shipdayOrderId: string, p: DeliveredPayload): Promise<boolean> {
   const existing = await prisma.shipdayOrder.findUnique({ where: { shipdayOrderId } });
-  if (existing) return false;
 
   const companyAmount = Math.round(p.deliveryValue * (p.commissionPercent / 100));
   let driverId: string | null = null;
@@ -307,6 +323,50 @@ async function persistDeliveredOrder(branchId: string, shipdayOrderId: string, p
   }
 
   const dateStr = toBogotaDateStr(p.deliveredAt);
+
+  if (existing) {
+    // AUTOSANACIÓN: el pedido ya está guardado, pero puede ser un stub del webhook con
+    // valor 0 (ver SELF_HEAL_SINCE). Si el registro está en 0 y el polling ya trae la
+    // tarifa real (>0), lo corregimos UNA sola vez: valor, comisión, número y datos del
+    // cliente, y lo CONTAMOS por primera vez (deuda + estadística del día real), porque
+    // el stub en 0 nunca se contó (el webhook exige companyAmount>0 para sumar).
+    // Solo pedidos creados a partir del despliegue de este arreglo: los viejos no se tocan.
+    const isZeroStub =
+      existing.deliveryValue === 0 &&
+      p.deliveryValue > 0 &&
+      companyAmount > 0 &&
+      existing.createdAt >= SELF_HEAL_SINCE &&
+      !existing.shipdayOrderId.startsWith("manual-"); // los manuales no se sincronizan
+    if (!isZeroStub) return false;
+
+    const effectiveDriverId = driverId ?? existing.driverId;
+    await prisma.$transaction(async (tx) => {
+      await tx.shipdayOrder.update({
+        where: { id: existing.id },
+        data: {
+          deliveryValue: p.deliveryValue,
+          companyAmount,
+          driverId: effectiveDriverId,
+          orderNumber: p.orderNumber ?? existing.orderNumber,
+          customerName: p.customerName ?? existing.customerName,
+          customerAddress: p.customerAddress ?? existing.customerAddress,
+          deliveredAt: p.deliveredAt,
+          rawData: p.raw,
+        },
+      });
+      if (effectiveDriverId) {
+        // Netea contra el crédito existente (no apila deuda y crédito a la vez).
+        await applyDebtDelta(tx, effectiveDriverId, companyAmount);
+        await tx.dailyDriverStat.upsert({
+          where: { date_driverId: { date: dateStr, driverId: effectiveDriverId } },
+          create: { date: dateStr, branchId, driverId: effectiveDriverId, orderCount: 1, totalValue: p.deliveryValue, companyTotal: companyAmount },
+          update: { orderCount: { increment: 1 }, totalValue: { increment: p.deliveryValue }, companyTotal: { increment: companyAmount } },
+        });
+      }
+    });
+    console.log(`[sync] pedido sanado (stub $0→real): #${p.orderNumber ?? existing.orderNumber ?? "?"} (${shipdayOrderId}) valor=${p.deliveryValue} driver=${effectiveDriverId ?? "sin asignar"}`);
+    return true;
+  }
 
   // Todas las escrituras en una sola transacción — previene datos inconsistentes en crash
   await prisma.$transaction(async (tx) => {
