@@ -1,25 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, Plus, AlertTriangle, CheckCircle2, Trash2, ChevronDown, ChevronUp, Bell } from "lucide-react";
+import { Users, Plus, AlertTriangle, CheckCircle2, Trash2, ChevronDown, ChevronUp, Bell, Clock } from "lucide-react";
 import { toast } from "sonner";
 import * as api from "@/lib/sd-api";
 import { ClientDebtWizard } from "@/components/wizards/ClientDebtWizard";
 import { useAuth } from "@/lib/auth";
 import { useLive } from "@/lib/use-live";
+import { HourlyClientsTab } from "./HourlyClientsTab";
 
 function formatCOP(n: number) {
   return "$" + n.toLocaleString("es-CO");
 }
 
+type Tab = "deudas" | "hora";
+
 export default function ClientesPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const [tab, setTab] = useState<Tab>("deudas");
   const [clients, setClients] = useState<api.Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [wizardMode, setWizardMode] = useState<"new_client" | "add_debt" | "pay_debt" | null>(null);
   const [selectedClient, setSelectedClient] = useState<api.Client | undefined>();
+  // Detalle del cliente expandido: trae TODAS sus deudas (incluidas las pagadas),
+  // que la lista liviana (getClients, solo paid:false) no incluye. Se carga bajo
+  // demanda al expandir, para no engordar la carga de la lista principal.
+  const [detail, setDetail] = useState<api.Client | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const load = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -29,6 +38,24 @@ export default function ClientesPage() {
     } catch { if (!silent) toast.error("Error al cargar clientes"); }
     if (!silent) setLoading(false);
   };
+
+  const loadDetail = async (id: string) => {
+    setDetailLoading(true);
+    try { setDetail(await api.getClient(id)); }
+    catch { toast.error("Error al cargar el historial del cliente"); }
+    finally { setDetailLoading(false); }
+  };
+
+  // Al expandir un cliente cargamos su detalle (con las deudas ya pagadas); al
+  // colapsar lo limpiamos. Recargar tras un abono/pago mantiene el historial al día.
+  async function toggleExpand(c: api.Client) {
+    if (expandedId === c.id) { setExpandedId(null); setDetail(null); return; }
+    setExpandedId(c.id);
+    setDetail(null);
+    loadDetail(c.id);
+  }
+
+  const refreshAfterAction = () => { load(); if (expandedId) loadDetail(expandedId); };
 
   useEffect(() => { load(); }, []);
   useLive(() => load(true), 5000);
@@ -87,25 +114,39 @@ export default function ClientesPage() {
           <h1 className="text-2xl font-black">Clientes</h1>
           <p className="text-sm text-muted-foreground">Gestión de deudas y saldos pendientes</p>
         </div>
-        <div className="flex gap-2">
-          {debtors.length > 0 && (
+        {tab === "deudas" && (
+          <div className="flex gap-2">
+            {debtors.length > 0 && (
+              <button
+                onClick={notifyDebtors}
+                className="flex items-center gap-2 px-3 py-2 border border-border rounded-xl text-sm font-bold hover:bg-secondary transition"
+              >
+                <Bell className="h-4 w-4" />
+                Notificar deudores ({debtors.length})
+              </button>
+            )}
             <button
-              onClick={notifyDebtors}
-              className="flex items-center gap-2 px-3 py-2 border border-border rounded-xl text-sm font-bold hover:bg-secondary transition"
+              onClick={() => { setSelectedClient(undefined); setWizardMode("new_client"); }}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 transition"
             >
-              <Bell className="h-4 w-4" />
-              Notificar deudores ({debtors.length})
+              <Plus className="h-4 w-4" /> Nuevo cliente
             </button>
-          )}
-          <button
-            onClick={() => { setSelectedClient(undefined); setWizardMode("new_client"); }}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 transition"
-          >
-            <Plus className="h-4 w-4" /> Nuevo cliente
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
+      {/* Pestañas: deudas normales / clientes por hora */}
+      <div className="flex gap-1 p-1 bg-secondary/50 rounded-2xl w-fit">
+        <TabBtn active={tab === "deudas"} onClick={() => { setTab("deudas"); setExpandedId(null); }}>
+          <Users className="h-4 w-4" /> Deudas normales
+        </TabBtn>
+        <TabBtn active={tab === "hora"} onClick={() => { setTab("hora"); setExpandedId(null); }}>
+          <Clock className="h-4 w-4" /> Clientes por hora
+        </TabBtn>
+      </div>
+
+      {tab === "deudas" ? (
+      <>
       {/* Summary cards */}
       {debtors.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -164,7 +205,7 @@ export default function ClientesPage() {
                       + Deuda
                     </button>
                     <button
-                      onClick={() => setExpandedId(expanded ? null : c.id)}
+                      onClick={() => toggleExpand(c)}
                       className="p-1.5 rounded-lg hover:bg-secondary transition"
                     >
                       {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -208,20 +249,13 @@ export default function ClientesPage() {
                       </div>
                     )}
 
-                    {c.debts.filter(d => d.paid).length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Historial pagado</p>
-                        {c.debts.filter(d => d.paid).slice(0, 3).map(d => (
-                          <div key={d.id} className="flex items-center justify-between p-3 rounded-xl bg-secondary/30">
-                            <div>
-                              <p className="text-sm font-medium line-through opacity-60">{d.description}</p>
-                              <p className="text-xs text-muted-foreground">{d.paidAt ? new Date(d.paidAt).toLocaleDateString("es-CO") : ""}</p>
-                            </div>
-                            <span className="text-sm text-green-600 font-medium">✓ Pagado</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {/* Historial de deudas pagadas: fecha de la deuda, cuándo se pagó,
+                        descripción y monto — agrupado por tanda de pago para conciliar. */}
+                    {detailLoading && !detail ? (
+                      <p className="text-sm text-muted-foreground text-center py-3">Cargando historial…</p>
+                    ) : detail && detail.id === c.id ? (
+                      <PaidHistory debts={detail.debts} />
+                    ) : null}
 
                     <div className="flex gap-2 pt-2">
                       <button onClick={() => toggleActive(c)} className="flex-1 py-2 text-xs font-bold border border-border rounded-xl hover:bg-secondary transition">
@@ -241,17 +275,32 @@ export default function ClientesPage() {
           })}
         </div>
       )}
+      </>
+      ) : (
+        <HourlyClientsTab />
+      )}
 
       {wizardMode === "new_client" && (
-        <ClientDebtWizard open={true} onOpenChange={(v) => { if (!v) setWizardMode(null); }} mode="new_client" onDone={load} />
+        <ClientDebtWizard open={true} onOpenChange={(v) => { if (!v) setWizardMode(null); }} mode="new_client" onDone={refreshAfterAction} />
       )}
       {wizardMode === "add_debt" && selectedClient && (
-        <ClientDebtWizard open={true} onOpenChange={(v) => { if (!v) setWizardMode(null); }} mode="add_debt" client={selectedClient} onDone={load} />
+        <ClientDebtWizard open={true} onOpenChange={(v) => { if (!v) setWizardMode(null); }} mode="add_debt" client={selectedClient} onDone={refreshAfterAction} />
       )}
       {wizardMode === "pay_debt" && selectedClient && (
-        <ClientDebtWizard open={true} onOpenChange={(v) => { if (!v) setWizardMode(null); }} mode="pay_debt" client={selectedClient} onDone={load} />
+        <ClientDebtWizard open={true} onOpenChange={(v) => { if (!v) setWizardMode(null); }} mode="pay_debt" client={selectedClient} onDone={refreshAfterAction} />
       )}
     </div>
+  );
+}
+
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition ${active ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -261,6 +310,89 @@ function SummaryCard({ icon, label, value, warn }: { icon: string; label: string
       <div className="text-2xl">{icon}</div>
       <div className="text-xs text-muted-foreground mt-2">{label}</div>
       <div className={`font-black text-xl tnum mt-0.5 ${warn ? "text-red-500" : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+// ─── Historial de deudas pagadas ──────────────────────────────────────────────
+// Zona horaria Bogotá SIEMPRE (igual que el resto del sistema): se formatea con
+// timeZone America/Bogota para no depender del reloj del navegador/equipo.
+function bogotaDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Bogota" }); // YYYY-MM-DD
+}
+function fmtShort(iso?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("es-CO", { timeZone: "America/Bogota", day: "2-digit", month: "2-digit", year: "numeric" });
+}
+function fmtDateTime(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("es-CO", { timeZone: "America/Bogota", day: "2-digit", month: "2-digit", year: "numeric" });
+  const time = d.toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "2-digit", minute: "2-digit" });
+  return `${date} ${time}`;
+}
+function fmtLongDay(day: string): string {
+  // day es "YYYY-MM-DD"; T12:00:00 evita cualquier cruce de día al formatear.
+  return new Date(day + "T12:00:00").toLocaleDateString("es-CO", { weekday: "short", day: "numeric", month: "long", year: "numeric" });
+}
+
+function PaidHistory({ debts }: { debts: api.ClientDebt[] }) {
+  const paid = debts
+    .filter(d => d.paid && d.paidAt)
+    .sort((a, b) => (a.paidAt! < b.paidAt! ? 1 : -1)); // más reciente primero
+
+  if (paid.length === 0) {
+    return <p className="text-sm text-muted-foreground text-center py-2">Sin deudas pagadas todavía</p>;
+  }
+
+  // Agrupar por día de pago (tanda) para poder conciliar el total cobrado ese día
+  // contra lo que realmente entró al banco/efectivo.
+  const groups: { day: string; items: api.ClientDebt[]; total: number }[] = [];
+  for (const d of paid) {
+    const day = bogotaDay(d.paidAt!);
+    let g = groups.find(x => x.day === day);
+    if (!g) { g = { day, items: [], total: 0 }; groups.push(g); }
+    g.items.push(d);
+    g.total += d.paidAmount ?? d.amount;
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+        Historial pagado · {paid.length} deuda(s)
+      </p>
+      <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+        {groups.map(g => (
+          <div key={g.day} className="rounded-xl border border-border/60 overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 bg-green-500/10">
+              <span className="text-xs font-bold text-green-700 dark:text-green-400 capitalize">
+                Pagado · {fmtLongDay(g.day)}
+              </span>
+              <span className="text-xs font-black text-green-700 dark:text-green-400 tnum shrink-0">
+                {formatCOP(g.total)} · {g.items.length}
+              </span>
+            </div>
+            <div className="divide-y divide-border/40">
+              {g.items.map(d => (
+                <div key={d.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{d.description || "Sin descripción"}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      🗓️ Deuda del {fmtShort(d.createdAt)} · 👤 creó: <span className="font-semibold">{d.createdByName ?? "—"}</span>
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      ✅ pagó {fmtDateTime(d.paidAt)}{d.paidByName ? ` · ${d.paidByName}` : ""}
+                    </p>
+                  </div>
+                  <span className="text-sm font-bold text-green-600 tnum shrink-0">
+                    {formatCOP(d.paidAmount ?? d.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

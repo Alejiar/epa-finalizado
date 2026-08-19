@@ -610,6 +610,8 @@ export interface ClientDebt {
   paid: boolean;
   paidAt?: string;
   paidAmount?: number;
+  createdByName?: string | null; // quién registró la deuda
+  paidByName?: string | null;    // quién registró el cobro
   createdAt: string;
 }
 
@@ -635,6 +637,80 @@ export const payClient = (clientId: string, amount: number, payAll = false, medi
   apiFetch<{ applied: number; remaining: number }>(`/clients/${clientId}/pay`, {
     method: "POST", body: JSON.stringify({ amount, payAll, medium }),
   });
+
+// ─── Clientes por hora (alquiler de domiciliarios) ────────────────────────────
+
+export interface HourlyShift {
+  id: string;
+  hourlyClientId: string;
+  driverId?: string | null;
+  driverName: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  minutes: number;
+  driverAmount: number;
+  companyAmount: number;
+  totalAmount: number;
+  driverPaid: boolean;
+  driverPaidMedium?: "cash" | "bank" | null;
+  driverPaidAt?: string | null;
+  driverPaidByName?: string | null;
+  paid: boolean;
+  paidAmount: number;
+  paidAt?: string | null;
+  paidCash?: number;
+  paidBank?: number;
+  paidByName?: string | null;
+  createdByName?: string | null;
+  createdAt: string;
+  // Presente solo en el historial global (incluye el cliente al que pertenece el turno).
+  hourlyClient?: { id: string; name: string };
+}
+
+export interface HourlyClient {
+  id: string;
+  name: string;
+  driverHourValue: number;
+  companyHourValue: number;
+  pendingDebt: number;
+  active: boolean;
+  createdAt: string;
+  shifts: HourlyShift[];
+  // Calculados por el backend:
+  pendingDriverPay: number;   // lo que falta pagarle a domiciliarios (turnos sin pagar)
+  driverOutstanding: number;  // parte domiciliario de la deuda viva del cliente
+  companyOutstanding: number; // parte empresa (ganancia) de la deuda viva
+}
+
+export const getHourlyClients = (active?: boolean) =>
+  apiFetch<HourlyClient[]>(`/hourly-clients${active ? "?active=true" : ""}`);
+export const getHourlyClient = (id: string) => apiFetch<HourlyClient>(`/hourly-clients/${id}`);
+export const createHourlyClient = (data: { name: string; driverHourValue: number; companyHourValue: number }) =>
+  apiFetch<HourlyClient>("/hourly-clients", { method: "POST", body: JSON.stringify(data) });
+export const updateHourlyClient = (
+  id: string,
+  data: Partial<{ name: string; driverHourValue: number; companyHourValue: number; active: boolean }>,
+) => apiFetch<HourlyClient>(`/hourly-clients/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+export const deleteHourlyClient = (id: string) =>
+  apiFetch<void>(`/hourly-clients/${id}`, { method: "DELETE" });
+export const registerHourlyShift = (
+  clientId: string,
+  data: { driverId: string; startTime: string; endTime: string; date?: string; medium: "cash" | "bank" },
+) => apiFetch<HourlyShift>(`/hourly-clients/${clientId}/shifts`, { method: "POST", body: JSON.stringify(data) });
+export const payHourlyClient = (clientId: string, amount: number, payAll = false, medium: "cash" | "bank" = "cash") =>
+  apiFetch<{ applied: number; remaining: number }>(`/hourly-clients/${clientId}/pay`, {
+    method: "POST", body: JSON.stringify({ amount, payAll, medium }),
+  });
+export const payHourlyDriver = (shiftId: string, medium: "cash" | "bank") =>
+  apiFetch<{ ok: boolean }>(`/hourly-shifts/${shiftId}/pay-driver`, {
+    method: "POST", body: JSON.stringify({ medium }),
+  });
+export const editHourlyShift = (shiftId: string, data: { driverId?: string; startTime?: string; endTime?: string; date?: string }) =>
+  apiFetch<{ ok: boolean }>(`/hourly-shifts/${shiftId}`, { method: "PATCH", body: JSON.stringify(data) });
+export const deleteHourlyShift = (shiftId: string) =>
+  apiFetch<void>(`/hourly-shifts/${shiftId}`, { method: "DELETE" });
+export const getHourlyShiftsHistory = () => apiFetch<HourlyShift[]>("/hourly-shifts");
 
 // ─── Bank Transactions ────────────────────────────────────────────────────────
 

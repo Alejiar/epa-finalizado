@@ -285,6 +285,22 @@ model ShipdayOrder {
   @@index([status])
 }
 
+// Lápida (tombstone) de un pedido de Shipday eliminado por aprobación de EditRequest.
+// Shipday SIGUE reportando ese pedido como entregado (ALREADY_DELIVERED), así que el
+// polling (persistDeliveredOrder) o el webhook lo RE-CREARÍAN, resucitando la deuda y la
+// estadística que la eliminación acababa de revertir. Guardar aquí su shipdayOrderId hace
+// que ambos paths se nieguen a recrearlo. Sin esto, aprobar la eliminación de un pedido
+// "no pega": el siguiente sync lo trae de vuelta y en el historial la solicitud queda como
+// Aprobada aunque el pedido siga vivo (bug real, Pedido #35, 18-ago-2026).
+model DeletedShipdayOrder {
+  shipdayOrderId String    @id
+  branchId       String?
+  orderNumber    String?
+  deliveredAt    DateTime?
+  deletedBy      String?
+  deletedAt      DateTime  @default(now())
+}
+
 model BaseTransaction {
   id                String   @id @default(cuid())
   branchId          String
@@ -479,6 +495,11 @@ model BankTransaction {
   // movimiento y la deuda del domiciliario nunca se restableció (caso Luisa Palencia,
   // 17-jul-2026). Con este campo la reversión no depende de adivinar el tipo.
   debtApplied   Int        @default(0)
+  // Enlace suelto (sin FK) al turno por hora que originó este movimiento (pago al
+  // domiciliario = egreso, cobro al cliente = ingreso). Permite borrar TODA la huella
+  // bancaria de un turno de una sola vez al eliminarlo, sin dejar cobros colgados ni
+  // egresos de compensación. Nulo en todo movimiento que no venga de "Clientes por hora".
+  hourlyShiftId String?
   createdBy     String?
   createdByName String?
   date          DateTime   @default(now())
@@ -492,6 +513,7 @@ model BankTransaction {
   @@index([driverId])
   @@index([groupId])
   @@index([pairId])
+  @@index([hourlyShiftId])
 }
 
 model ShiftClose {
@@ -522,4 +544,81 @@ model ShiftClose {
 
   @@unique([date, shift])
   @@index([date])
+}
+
+// ============================================================
+// MODELOS - Clientes por hora (alquiler de domiciliarios)
+// ============================================================
+
+// Empresa/tienda a la que se le alquilan domiciliarios por hora. Maneja DOS tarifas por
+// hora: lo que gana el domiciliario y la ganancia de la empresa; el total a cobrarle al
+// cliente es la suma de ambas. `pendingDebt` es un ledger informativo aparte —igual que
+// Client.pendingDebt—: los movimientos REALES de dinero (pago al domiciliario = egreso,
+// cobro al cliente = ingreso) se registran como BankTransaction, y SON ESOS los que
+// afectan el saldo esperado de caja/banco. NO sumar `pendingDebt` al esperado, o el mismo
+// dinero se contaría dos veces.
+model HourlyClient {
+  id               String   @id @default(cuid())
+  name             String
+  driverHourValue  Int // valor de la hora para el domiciliario (p. ej. 15.000)
+  companyHourValue Int // ganancia de la empresa por hora (p. ej. 5.000)
+  pendingDebt      Int      @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  shifts HourlyShift[]
+}
+
+// Un turno trabajado por un domiciliario para un HourlyClient. Las tarifas se CONGELAN al
+// registrar (driverAmount/companyAmount/totalAmount ya calculados por minutos), así que
+// cambiar la tarifa del cliente después NO altera turnos viejos.
+//
+// Dos etapas de dinero, cada una idempotente por su propia bandera:
+//  1) driverPaid — se le pagó al domiciliario (BankTransaction egreso en driverPaidBankTxId).
+//     Recién AHÍ el `totalAmount` del turno entra a la deuda del cliente. Sin pagar = sin
+//     deuda (regla del dueño: la deuda del cliente se genera al pagar al domiciliario).
+//  2) paid/paidAmount — el cliente abonó/pagó su deuda (mismo patrón que ClientDebt, FIFO).
+//
+// driverId/driverName se guardan como campos sueltos (SIN relación con Driver, igual que
+// Conversion): el sistema por hora es independiente de la deuda de domicilios del driver;
+// pagarle la hora NO toca su pendingDebt/creditAmount.
+model HourlyShift {
+  id                 String    @id @default(cuid())
+  hourlyClientId     String
+  driverId           String?
+  driverName         String
+  date               String // YYYY-MM-DD (día del turno, zona Bogotá)
+  startTime          String // "HH:MM"
+  endTime            String // "HH:MM"
+  minutes            Int
+  driverAmount       Int
+  companyAmount      Int
+  totalAmount        Int
+  // Etapa 1 — pago al domiciliario
+  driverPaid         Boolean   @default(false)
+  driverPaidMedium   Medium?
+  driverPaidAt       DateTime?
+  driverPaidBankTxId String? // BankTransaction (egreso) del pago; enlace suelto, sin FK
+  driverPaidBy       String? // quién registró el pago al domiciliario
+  driverPaidByName   String?
+  // Etapa 2 — cobro al cliente
+  paid               Boolean   @default(false)
+  paidAmount         Int       @default(0)
+  paidAt             DateTime?
+  // Cuánto de este turno se cobró en efectivo / banco. Necesario para revertir el cobro
+  // con el MEDIO correcto si el turno se elimina ya estando (parcial o totalmente) cobrado.
+  paidCash           Int       @default(0)
+  paidBank           Int       @default(0)
+  paidBy             String? // quién registró el cobro al cliente
+  paidByName         String?
+  createdBy          String?
+  createdByName      String?
+  createdAt          DateTime  @default(now())
+
+  hourlyClient HourlyClient @relation(fields: [hourlyClientId], references: [id], onDelete: Cascade)
+
+  @@index([hourlyClientId])
+  @@index([hourlyClientId, driverPaid])
+  @@index([hourlyClientId, paid])
 }

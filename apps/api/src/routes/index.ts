@@ -18,6 +18,7 @@ import * as close from "../controllers/close.controller";
 import * as webhook from "../controllers/webhook.controller";
 import * as order from "../controllers/order.controller";
 import * as client from "../controllers/client.controller";
+import * as hourly from "../controllers/hourly-client.controller";
 import * as bankTx from "../controllers/bank-transaction.controller";
 import * as shiftClose from "../controllers/shift-close.controller";
 import * as unifiedMov from "../controllers/unified-movements.controller";
@@ -158,6 +159,19 @@ apiRouter.delete("/clients/:id", requireAdmin, asyncHandler(client.remove));
 apiRouter.post("/clients/:id/debt", asyncHandler(client.addDebt));
 apiRouter.post("/clients/:id/pay", asyncHandler(client.payClient));
 apiRouter.post("/clients/debts/:id/pay", asyncHandler(client.payDebt));
+
+// ─── Clientes por hora (alquiler de domiciliarios) ────────────────────────────
+apiRouter.get("/hourly-clients", asyncHandler(hourly.list));
+apiRouter.get("/hourly-clients/:id", asyncHandler(hourly.get));
+apiRouter.post("/hourly-clients", asyncHandler(hourly.create));
+apiRouter.patch("/hourly-clients/:id", asyncHandler(hourly.update));
+apiRouter.delete("/hourly-clients/:id", requireAdmin, asyncHandler(hourly.remove));
+apiRouter.post("/hourly-clients/:id/shifts", asyncHandler(hourly.registerShift));
+apiRouter.post("/hourly-clients/:id/pay", asyncHandler(hourly.payClient));
+apiRouter.get("/hourly-shifts", asyncHandler(hourly.history));
+apiRouter.post("/hourly-shifts/:id/pay-driver", asyncHandler(hourly.payDriver));
+apiRouter.patch("/hourly-shifts/:id", requireAdmin, asyncHandler(hourly.editShift));
+apiRouter.delete("/hourly-shifts/:id", requireAdmin, asyncHandler(hourly.removeShift));
 
 // ─── Transacciones bancarias ──────────────────────────────────────────────────
 apiRouter.get("/bank-transactions", asyncHandler(bankTx.list));

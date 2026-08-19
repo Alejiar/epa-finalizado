@@ -27,6 +27,17 @@ const ENTITY_LABELS: Record<string, string> = {
   BaseTransaction: "Base",
   ClientDebt: "Deuda de cliente",
   Conversion: "Conversión",
+  HourlyShift: "Turno por hora",
+};
+
+// Nombres legibles de campos en las solicitudes de edición (si no está, se usa la clave).
+const FIELD_LABELS: Record<string, string> = {
+  deliveryValue: "Valor del domicilio",
+  amount: "Valor",
+  startTime: "Hora entrada",
+  endTime: "Hora salida",
+  date: "Fecha",
+  driverName: "Domiciliario",
 };
 
 export default function SolicitudesPage() {
@@ -183,9 +194,9 @@ export default function SolicitudesPage() {
               ) : (
               <div className="glass rounded-2xl p-4 space-y-2">
                 <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Cambios solicitados</div>
-                {Object.entries(r.changes).map(([field, ch]) => (
+                {Object.entries(r.changes).filter(([field]) => !field.endsWith("Id")).map(([field, ch]) => (
                   <div key={field} className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground capitalize">{field}</span>
+                    <span className="text-muted-foreground capitalize">{FIELD_LABELS[field] ?? field}</span>
                     <span className="flex items-center gap-2">
                       <span className="line-through text-red-400">{formatVal(field, ch.old)}</span>
                       <span className="text-muted-foreground">→</span>

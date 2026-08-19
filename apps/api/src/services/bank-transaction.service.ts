@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma";
 import { bogotaOpenRange } from "../lib/date-range";
 import { badRequest } from "../lib/errors";
 import { BANK_LINKED_PAYMENT_NOTE, BANK_LINKED_BASE_PREFIX } from "../lib/balance-markers";
+import * as hourlySvc from "./hourly-client.service";
 
 export async function list(params?: { type?: "ingreso" | "egreso"; from?: string; to?: string }) {
   const where: Record<string, unknown> = {};
@@ -116,6 +117,14 @@ export async function create(data: {
 export async function remove(id: string) {
   const original = await prisma.bankTransaction.findUnique({ where: { id } });
   if (!original) return;
+  // Si el movimiento pertenece a un turno por hora, delegar al módulo por-hora: borra el
+  // turno (egreso = pago al domi) o revierte el cobro (ingreso), y sincroniza la deuda del
+  // cliente y los demás movimientos del turno. Así, borrar desde Banco también lo borra de
+  // Clientes por hora y de Movimientos (todos leen de bankTransaction).
+  if (original.hourlyShiftId) {
+    await hourlySvc.deleteHourlyBankTx(id);
+    return;
+  }
   // Movimiento mixto: hay que revertir/eliminar ambas mitades enlazadas.
   const rows = original.groupId
     ? await prisma.bankTransaction.findMany({ where: { groupId: original.groupId } })

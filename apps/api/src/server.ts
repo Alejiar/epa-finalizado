@@ -34,6 +34,24 @@ export function createServer(options: CreateServerOptions = {}): Express {
   // Frontend estático (modelo host: un solo puerto sirve API + UI)
   const webDir = options.webDir;
   if (webDir && fs.existsSync(webDir)) {
+    // Salvaguarda de navegación (export estático de Next App Router):
+    // Next sirve el estado de cada ruta como un payload RSC en un archivo ".txt" que el
+    // router pide por fetch para navegar sin recargar. En redes con latencia (p. ej.
+    // acceso remoto por Tailscale) ese fetch a veces falla y el router cae en una
+    // navegación DURA del documento hacia el ".txt"; como se entrega text/plain, el
+    // navegador muestra el payload como "código" crudo (bug reportado, ago-2026).
+    // Si detectamos una navegación de documento (Sec-Fetch-Dest: document, o sin ese
+    // header pero pidiendo text/html) hacia un ".txt", redirigimos a la ruta HTML real.
+    // Los fetch del router (Sec-Fetch-Dest: empty) NO se tocan y siguen recibiendo el RSC.
+    app.get(/\.txt$/i, (req, res, next) => {
+      const dest = req.get("sec-fetch-dest");
+      const accept = req.get("accept") ?? "";
+      const isDocNav = dest === "document" || (!dest && accept.includes("text/html"));
+      if (!isDocNav) return next();
+      const clean = req.path.replace(/\.txt$/i, "");
+      return res.redirect(302, clean === "" || clean === "/index" ? "/" : clean);
+    });
+
     // extensions:["html"] → una petición a /banco sirve banco.html automáticamente
     app.use(express.static(webDir, { extensions: ["html"] }));
     // Fallback para rutas no-API: intenta servir el .html específico de la ruta

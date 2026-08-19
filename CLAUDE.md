@@ -152,6 +152,33 @@ exista.
   no alcanza). Por eso el webhook NO debe dejar de crear el pedido cuando la tarifa
   llega en 0 — se crea y el polling lo sana.
 
+### Eliminar un pedido: la lápida (`DeletedShipdayOrder`) — no debe resucitar
+
+Como `persistDeliveredOrder` es idempotente por `shipdayOrderId` y **crea** cualquier
+pedido que no exista localmente, borrar un pedido entregado NO alcanza: Shipday lo sigue
+reportando como `ALREADY_DELIVERED`, así que el siguiente sync (rápido/catch-up/reconcile,
+que cubren hasta 14 días atrás) lo **re-crea** y vuelve a aplicar la comisión a la deuda del
+domiciliario. Bug real (Pedido #35, 18-ago-2026): un admin aprobó la eliminación vía
+`EditRequest`, el pedido se borró y **un minuto después el sync lo trajo de vuelta** — en el
+historial la solicitud quedaba "Aprobada" pero el pedido seguía vivo y la deuda intacta.
+
+- Al eliminar un `ShipdayOrder` por el flujo de aprobación
+  (`edit-request.service.ts::deleteEntity`), se escribe una **lápida** en
+  `DeletedShipdayOrder` (PK = `shipdayOrderId`). Tanto el polling
+  (`persistDeliveredOrder` en `branch.service.ts`) como el **webhook**
+  (`webhook.controller.ts`) consultan esa tabla **antes de crear** y se niegan a
+  recrear un pedido con lápida. **Si agregas otra ruta que cree pedidos desde Shipday,
+  respeta la lápida ahí también**, o el borrado dejará de "pegar".
+- La reversión de la comisión en ese borrado usa **`applyDebtDelta(tx, driverId,
+  -companyAmount)`**, NUNCA un `pendingDebt: { decrement }` crudo (misma regla de dinero
+  que bases/pagos: netea contra el crédito y topa en 0).
+- `reviewRequest` aplica el efecto (borrado/edición) **antes** de marcar la solicitud como
+  "Aprobada": si el efecto falla, la solicitud queda "pending" y el error sube — nunca queda
+  un falso "Aprobada" en el historial.
+- Las lápidas son intencionalmente permanentes (borrar un pedido no debe deshacerse solo por
+  un sync). Si alguna vez hay que **re-cargar** un pedido borrado a propósito, hay que
+  **eliminar su fila de `DeletedShipdayOrder`** primero.
+
 ## Cierre de caja: "día operativo" ≠ fecha calendario
 
 El día que se puede cerrar **no avanza solo porque cambió la fecha**. Solo

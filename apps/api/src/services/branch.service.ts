@@ -311,6 +311,11 @@ interface DeliveredPayload {
 }
 
 async function persistDeliveredOrder(branchId: string, shipdayOrderId: string, p: DeliveredPayload): Promise<boolean> {
+  // Lápida: un pedido que un admin eliminó (vía EditRequest) NO debe resucitar aunque
+  // Shipday lo siga reportando entregado. Sin esta guarda, el borrado "no pega".
+  const tombstoned = await prisma.deletedShipdayOrder.findUnique({ where: { shipdayOrderId } });
+  if (tombstoned) return false;
+
   const existing = await prisma.shipdayOrder.findUnique({ where: { shipdayOrderId } });
 
   const companyAmount = Math.round(p.deliveryValue * (p.commissionPercent / 100));

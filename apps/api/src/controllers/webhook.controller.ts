@@ -102,6 +102,11 @@ export async function shipdayWebhook(req: Request, res: Response) {
     const existing = await prisma.shipdayOrder.findUnique({ where: { shipdayOrderId: orderId } });
     if (existing) { ignored++; continue; }
 
+    // Lápida: si un admin eliminó este pedido (vía EditRequest), no recrearlo aunque
+    // Shipday reenvíe el evento de entrega. Ver modelo DeletedShipdayOrder.
+    const tombstoned = await prisma.deletedShipdayOrder.findUnique({ where: { shipdayOrderId: orderId } });
+    if (tombstoned) { ignored++; continue; }
+
     // Valor del domicilio: webhook `delivery_fee`; compat `costing.deliveryFee`/etc.
     const costing = asObj(order.costing);
     const deliveryValue = Math.round(num(

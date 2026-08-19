@@ -3,6 +3,7 @@ import { notFound, badRequest } from "../lib/errors";
 import { toBogotaDateStr } from "../lib/date-range";
 import { BANK_LINKED_PAYMENT_NOTE, BANK_LINKED_BASE_PREFIX } from "../lib/balance-markers";
 import { applyDebtDelta } from "./driver.service";
+import { deleteShift as deleteHourlyShift, editShift as editHourlyShift, deleteHourlyBankTx } from "./hourly-client.service";
 
 type ChangeMap = Record<string, { old: string; new: string }>;
 
@@ -56,7 +57,21 @@ export async function reviewRequest(id: string, reviewerId: string, action: "app
   if (!req) throw notFound("Solicitud no encontrada");
   if (req.status !== "pending") throw badRequest("Esta solicitud ya fue procesada");
 
-  // Actualizar estado de la solicitud
+  // Aplicar el efecto ANTES de marcar la solicitud. Si el borrado/edición falla, la
+  // solicitud queda "pending" y el error sube al admin (puede reintentar) — nunca queda
+  // "Aprobada" en el historial sin haber tocado nada. Antes se marcaba aprobada primero
+  // y luego se aplicaba el efecto: un fallo dejaba un falso "Aprobada" (parte del bug del
+  // Pedido #35). El propio efecto de cada entidad ya es transaccional.
+  if (action === "approved") {
+    if (req.requestType === "delete") {
+      await deleteEntity(req.entityType, req.entityId, reviewerId);
+    } else {
+      const reviewer = await prisma.user.findUnique({ where: { id: reviewerId }, select: { name: true } });
+      await applyChanges(req.entityType, req.entityId, req.changes as ChangeMap, { id: reviewerId, name: reviewer?.name ?? null });
+    }
+  }
+
+  // Marcar el estado de la solicitud solo si el efecto anterior no lanzó.
   const updated = await prisma.editRequest.update({
     where: { id },
     data: {
@@ -70,32 +85,21 @@ export async function reviewRequest(id: string, reviewerId: string, action: "app
     },
   });
 
-  // Si se aprueba, aplicar el cambio o la eliminación automáticamente
-  if (action === "approved") {
-    if (req.requestType === "delete") {
-      await deleteEntity(req.entityType, req.entityId);
-    } else {
-      const reviewer = await prisma.user.findUnique({ where: { id: reviewerId }, select: { name: true } });
-      await applyChanges(req.entityType, req.entityId, req.changes as ChangeMap, { id: reviewerId, name: reviewer?.name ?? null });
-    }
-  }
-
   return updated;
 }
 
 // ── Eliminar entidad revirtiendo sus efectos en deudas/saldos ─────────────────
-async function deleteEntity(entityType: string, entityId: string) {
+async function deleteEntity(entityType: string, entityId: string, deletedBy?: string) {
   switch (entityType) {
     case "ShipdayOrder": {
       const order = await prisma.shipdayOrder.findUnique({ where: { id: entityId } });
       if (!order) return;
       await prisma.$transaction(async (tx) => {
-        // Revertir la comisión de la deuda del domiciliario
+        // Revertir la comisión de la deuda del domiciliario. Vía applyDebtDelta (NUNCA un
+        // decrement crudo): netea contra el crédito a favor y topa en 0, así no deja
+        // pendingDebt negativo (regla de dinero, ver CLAUDE.md).
         if (order.driverId && order.companyAmount > 0) {
-          await tx.driver.update({
-            where: { id: order.driverId },
-            data: { pendingDebt: { decrement: order.companyAmount } },
-          });
+          await applyDebtDelta(tx, order.driverId, -order.companyAmount);
         }
         // Revertir stats diarias
         if (order.driverId && order.deliveredAt) {
@@ -115,6 +119,20 @@ async function deleteEntity(entityType: string, entityId: string) {
           }
         }
         await tx.shipdayOrder.delete({ where: { id: entityId } });
+        // Lápida: impide que el polling/webhook de Shipday resucite este pedido (sigue
+        // reportándose como entregado allá). upsert, no create, por si alguna vez se
+        // reintenta el borrado del mismo shipdayOrderId. Ver modelo DeletedShipdayOrder.
+        await tx.deletedShipdayOrder.upsert({
+          where: { shipdayOrderId: order.shipdayOrderId },
+          create: {
+            shipdayOrderId: order.shipdayOrderId,
+            branchId: order.branchId,
+            orderNumber: order.orderNumber,
+            deliveredAt: order.deliveredAt,
+            deletedBy: deletedBy ?? null,
+          },
+          update: { deletedAt: new Date(), deletedBy: deletedBy ?? null },
+        });
       });
       break;
     }
@@ -124,6 +142,13 @@ async function deleteEntity(entityType: string, entityId: string) {
     case "BankTransaction": {
       const bankTx = await prisma.bankTransaction.findUnique({ where: { id: entityId } });
       if (!bankTx) break;
+      // Movimiento de un turno por hora: delegar al módulo por-hora, que borra el turno
+      // (egreso = pago al domi) o revierte el cobro (ingreso) y sincroniza la deuda del
+      // cliente. Así, borrar desde Movimientos también lo borra de Clientes por hora.
+      if (bankTx.hourlyShiftId) {
+        await deleteHourlyBankTx(entityId);
+        break;
+      }
       await prisma.$transaction(async (tx) => {
         // Si este movimiento redujo la deuda de un domiciliario, revertirla y limpiar
         // los registros contables subsidiarios (BaseTransaction + DriverPayment
@@ -254,6 +279,11 @@ async function deleteEntity(entityType: string, entityId: string) {
       // Cierre de turno: es solo un registro de conteo, no afecta deudas/saldos.
       await prisma.shiftClose.delete({ where: { id: entityId } });
       break;
+    case "HourlyShift":
+      // Turno por hora: revierte el pago al domiciliario y el cobro del cliente (ver
+      // deleteShift en hourly-client.service.ts).
+      await deleteHourlyShift(entityId);
+      break;
     default:
       console.warn(`[delete-request] entityType desconocido: ${entityType}`);
   }
@@ -339,6 +369,16 @@ async function applyChanges(entityType: string, entityId: string, changes: Chang
       break;
     case "Conversion":
       await prisma.conversion.update({ where: { id: entityId }, data: newValues });
+      break;
+    case "HourlyShift":
+      // Turno por hora: recalcula montos y ajusta dinero (ver editShift). Solo se pasan
+      // los campos editables; driverName va solo para mostrar en la solicitud y se ignora.
+      await editHourlyShift(entityId, {
+        driverId: newValues.driverId != null ? String(newValues.driverId) : undefined,
+        startTime: newValues.startTime != null ? String(newValues.startTime) : undefined,
+        endTime: newValues.endTime != null ? String(newValues.endTime) : undefined,
+        date: newValues.date != null ? String(newValues.date) : undefined,
+      });
       break;
     default:
       console.warn(`[edit-request] entityType desconocido: ${entityType}`);
