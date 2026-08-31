@@ -171,6 +171,15 @@ export function MonthlyCloseWizard({ open, onOpenChange, branches, onDone }: Pro
                 <div className="glass rounded-2xl p-4 space-y-1.5 border border-primary/20">
                   <Row label="Capital objetivo" value={formatCOP(targetTotal)} />
                   <Row label="− Deudas / diferencias pendientes" value={formatCOP(projection.pending.total)} />
+                  {/* Desglose de qué compone ese descuento — así se VE que las deudas de clientes
+                      (normal y por hora) sí se están restando del capital objetivo. */}
+                  <div className="pl-3 space-y-1 border-l-2 border-border/60">
+                    {projection.pending.basesDiff !== 0 && <SubRow label="Bases sin devolver" amount={projection.pending.basesDiff} />}
+                    {projection.pending.commissionPending !== 0 && <SubRow label="Comisiones domiciliarios" amount={projection.pending.commissionPending} />}
+                    {projection.pending.transferDiff !== 0 && <SubRow label="Transferencias sin cuadrar" amount={projection.pending.transferDiff} />}
+                    {projection.pending.clientDebtsNormal !== 0 && <SubRow label="Deudas clientes" amount={projection.pending.clientDebtsNormal} />}
+                    {projection.pending.clientDebtsHourly !== 0 && <SubRow label="Deudas clientes por hora" amount={projection.pending.clientDebtsHourly} />}
+                  </div>
                   <hr className="border-border" />
                   <Row label="Capital físico a dejar" value={formatCOP(physicalToLeave)} highlight />
                   <p className="text-[11px] text-muted-foreground leading-relaxed pt-1">
@@ -285,6 +294,18 @@ function Row({ label, value, highlight }: { label: string; value: string; highli
     <div className="flex items-center justify-between text-sm">
       <span className="text-muted-foreground">{label}</span>
       <span className={`font-bold ${highlight ? "text-primary" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+// Línea de detalle (indentada) de un componente del descuento. Un componente positivo RESTA
+// del objetivo (muestra "−"); uno negativo (p. ej. transferencias con más egresos) SUMA ("+").
+function SubRow({ label, amount }: { label: string; amount: number }) {
+  const sign = amount >= 0 ? "−" : "+";
+  return (
+    <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <span>· {label}</span>
+      <span className="tnum">{sign} {formatCOP(Math.abs(amount))}</span>
     </div>
   );
 }

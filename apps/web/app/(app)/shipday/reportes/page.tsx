@@ -214,7 +214,7 @@ function MonthlyReportPanel({ report }: { report: MonthlyReport }) {
           label="Saldo Deudas Clientes"
           ok={report.clientDebt.ok}
           value={report.clientDebt.balance}
-          detail={!report.clientDebt.ok ? `Generadas ${fmt(report.clientDebt.generated)} − Pagadas ${fmt(report.clientDebt.paid)}` : undefined}
+          detail={!report.clientDebt.ok ? `Saldo vivo que aún deben — normal ${fmt(report.clientDebt.normal)} + por hora ${fmt(report.clientDebt.hourly)}` : undefined}
           items={report.clientDebt.pendingClients.map(c => ({ id: c.id, label: c.name, amount: c.pendingDebt }))}
           linkHref="/clientes"
           linkLabel="Ir a Clientes →"

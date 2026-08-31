@@ -740,7 +740,7 @@ export interface MonthlyReport {
   bases: { given: number; returned: number; diff: number; ok: boolean; pendingDrivers: { id: string; name: string; pendingDebt: number }[] };
   commission: { pending: number; ok: boolean; pendingDrivers: { id: string; name: string; pendingDebt: number }[] };
   transfers: { ingresos: number; egresos: number; diff: number; ok: boolean; pendingItems?: { id: string; name: string; pendingDebt: number }[] };
-  clientDebt: { generated: number; paid: number; balance: number; ok: boolean; pendingClients: { id: string; name: string; pendingDebt: number }[] };
+  clientDebt: { generated: number; paid: number; balance: number; normal: number; hourly: number; ok: boolean; pendingClients: { id: string; name: string; pendingDebt: number }[] };
   netProfit: number;
   profitability: number;
 }
@@ -758,6 +758,8 @@ export interface MonthCloseProjection {
     commissionPending: number;
     totalDiffs: number;
     clientDebts: number;
+    clientDebtsNormal: number;
+    clientDebtsHourly: number;
     cashShortfall: number;
     bankShortfall: number;
     total: number;

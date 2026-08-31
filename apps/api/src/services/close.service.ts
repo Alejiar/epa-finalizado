@@ -25,6 +25,7 @@ export async function getMonthlyReport(month: string, branchId?: string) {
     debtsGenAgg, debtsPaidAgg,
     driversWithBase,
     clientsWithDebt,
+    normalDebtAgg, hourlyDebtAgg, hourlyClientsWithDebt,
   ] = await Promise.all([
     prisma.shipdayOrder.aggregate({ where: orderWhere, _sum: { companyAmount: true } }),
     prisma.movement.aggregate({ where: { category: 3, status: "confirmed", date: { startsWith: monthPrefix } }, _sum: { amount: true } }),
@@ -47,6 +48,13 @@ export async function getMonthlyReport(month: string, branchId?: string) {
       where: branchId ? { branchId } : {},
     }),
     prisma.client.findMany({ where: { pendingDebt: { gt: 0 } }, select: { id: true, name: true, pendingDebt: true }, orderBy: { pendingDebt: "desc" }, take: 20 }),
+    // Saldo VIVO de deuda de clientes (lo que aún deben AHORA), normal y por hora. Es el número
+    // real del indicador "Saldo Deudas Clientes": antes usaba solo el neto del mes de clientes
+    // normales (generadas − pagadas) y jamás miraba a los clientes por hora, así que salía en
+    // ✅ $0 aunque los clientes por hora debieran. Clientes (normal/hora) son globales (sin branchId).
+    prisma.client.aggregate({ where: { pendingDebt: { gt: 0 } }, _sum: { pendingDebt: true } }),
+    prisma.hourlyClient.aggregate({ where: { pendingDebt: { gt: 0 } }, _sum: { pendingDebt: true } }),
+    prisma.hourlyClient.findMany({ where: { pendingDebt: { gt: 0 } }, select: { id: true, name: true, pendingDebt: true }, orderBy: { pendingDebt: "desc" }, take: 20 }),
   ]);
 
   // Calcular saldo de base pendiente por domiciliario (solo bases, sin comisiones)
@@ -123,7 +131,16 @@ export async function getMonthlyReport(month: string, branchId?: string) {
   // de un domiciliario ya saldado). Así el indicador cuadra con la lista pendingDrivers.
   const basesDiff = basePendingReconciled;           // esperado 0
   const transferDiff = bankIng - bankEgr;            // esperado 0
-  const clientDebtBalance = debtsGen - debtsPaid;    // esperado 0
+  // Saldo VIVO de clientes = lo que AÚN deben (normal + por hora), no el neto del mes. Es la
+  // plata que está fuera de la caja; el indicador es "cuadrado" (verde) solo si nadie debe.
+  const clientDebtNormal = normalDebtAgg._sum.pendingDebt ?? 0;
+  const clientDebtHourly = hourlyDebtAgg._sum.pendingDebt ?? 0;
+  const clientDebtBalance = clientDebtNormal + clientDebtHourly;
+  // Lista de quién debe: normales + por hora (estos con sufijo para distinguirlos), top 20.
+  const pendingClients = [
+    ...clientsWithDebt.map(c => ({ id: c.id, name: c.name, pendingDebt: c.pendingDebt })),
+    ...hourlyClientsWithDebt.map(c => ({ id: c.id, name: `${c.name} (por hora)`, pendingDebt: c.pendingDebt })),
+  ].sort((a, b) => b.pendingDebt - a.pendingDebt).slice(0, 20);
   const netProfit = totalSales - totalExpenses - totalPayroll;
   const profitability = totalSales > 0 ? (netProfit / totalSales) * 100 : 0;
 
@@ -135,7 +152,7 @@ export async function getMonthlyReport(month: string, branchId?: string) {
     bases: { given: basesGiven, returned: basesPaid, diff: basesDiff, ok: basesDiff === 0, pendingDrivers: pendingBaseDrivers },
     commission: { pending: commissionPending, ok: commissionPending === 0, pendingDrivers: pendingCommissionDrivers },
     transfers: { ingresos: bankIng, egresos: bankEgr, diff: transferDiff, ok: pendingTransferMovs.length === 0, pendingItems: transferPendingItems },
-    clientDebt: { generated: debtsGen, paid: debtsPaid, balance: clientDebtBalance, ok: clientDebtBalance === 0, pendingClients: clientsWithDebt },
+    clientDebt: { generated: debtsGen, paid: debtsPaid, balance: clientDebtBalance, normal: clientDebtNormal, hourly: clientDebtHourly, ok: clientDebtBalance === 0, pendingClients },
     netProfit,
     profitability,
   };
@@ -165,7 +182,13 @@ export async function getMonthCloseProjection(
   const commissionPending = report.commission.pending;
   const pendingDiffs = basesDiff + transferDiff + commissionPending;
 
-  // Deudas de clientes pendientes.
+  // Deudas de clientes pendientes = plata que los clientes AÚN deben y no está en la caja.
+  // Es el saldo VIVO actual (igual que bases/comisiones, que usan la deuda neta actual del
+  // domiciliario), normal + por hora. Se toma del reporte, que ya lo calcula así (fuente única);
+  // antes se usaba el neto "generadas − pagadas" del mes, que ignoraba deudas viejas y a los
+  // clientes por hora, así que al cerrar el mes las deudas de clientes no se descontaban.
+  const clientDebtsNormal = report.clientDebt.normal;
+  const clientDebtsHourly = report.clientDebt.hourly;
   const pendingDebts = report.clientDebt.balance;
 
   // Atribución del faltante por medio:
@@ -191,6 +214,8 @@ export async function getMonthCloseProjection(
       commissionPending,
       totalDiffs: pendingDiffs,
       clientDebts: pendingDebts,
+      clientDebtsNormal,
+      clientDebtsHourly,
       cashShortfall,
       bankShortfall,
       total: pendingDiffs + pendingDebts,
@@ -201,7 +226,8 @@ export async function getMonthCloseProjection(
     physicalToLeave,
     explanation:
       `Objetivo: ${tCash} efectivo + ${tBank} banco = ${targetCapital}. ` +
-      `Falta en efectivo ${cashShortfall} (bases ${basesDiff} + comisiones ${commissionPending} + deudas ${pendingDebts}) ` +
+      `Falta en efectivo ${cashShortfall} (bases ${basesDiff} + comisiones ${commissionPending} + ` +
+      `deudas clientes ${pendingDebts} [normal ${clientDebtsNormal} + por hora ${clientDebtsHourly}]) ` +
       `y en banco ${bankShortfall} (transferencias). ` +
       `Dejar físicamente: ${physicalCash} en efectivo y ${physicalBank} en banco = ${physicalToLeave}.`,
     report,
