@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAdmin, requireAuth } from "../middlewares/auth";
+import { requireAuthorizedDevice, logActivity } from "../middlewares/device";
 import { asyncHandler } from "../middlewares/error";
 import { validate } from "../middlewares/validate";
 import * as auth from "../controllers/auth.controller";
@@ -26,6 +27,7 @@ import * as users from "../controllers/user.controller";
 import * as editReq from "../controllers/edit-request.controller";
 import * as network from "../controllers/network.controller";
 import * as fieldNote from "../controllers/field-note.controller";
+import * as device from "../controllers/device.controller";
 import {
   createMovementSchema,
   createWorkerSchema,
@@ -54,6 +56,29 @@ apiRouter.post("/webhooks/shipday/:branchId", asyncHandler(webhook.shipdayWebhoo
 
 // ─── A partir de aquí, todo requiere autenticación ───────────────────────────
 apiRouter.use(requireAuth);
+
+// ─── Estado del propio equipo (ANTES de la puerta) ────────────────────────────
+// Un PC pendiente/bloqueado DEBE poder consultar su estado para mostrar la pantalla de
+// "esperando autorización". Registra el equipo si es la primera vez que se ve.
+apiRouter.get("/devices/me", asyncHandler(device.me));
+
+// ─── Puerta de EQUIPOS + bitácora ─────────────────────────────────────────────
+// De aquí en adelante SOLO operan los PC autorizados (o el PC servidor por loopback), y cada
+// cambio (POST/PATCH/DELETE) queda registrado con el PC y el usuario que lo hizo.
+apiRouter.use(requireAuthorizedDevice);
+apiRouter.use(logActivity);
+
+// ─── Equipos: administración (solo admin) ─────────────────────────────────────
+apiRouter.get("/devices", requireAdmin, asyncHandler(device.list));
+apiRouter.get("/devices/pending-count", requireAdmin, asyncHandler(device.countPending));
+apiRouter.get("/devices/activity", requireAdmin, asyncHandler(device.activity));
+apiRouter.patch("/devices/:id/approve", requireAdmin, asyncHandler(device.approve));
+apiRouter.patch("/devices/:id/rename", requireAdmin, asyncHandler(device.rename));
+apiRouter.patch("/devices/:id/block", requireAdmin, asyncHandler(device.block));
+apiRouter.patch("/devices/:id/unblock", requireAdmin, asyncHandler(device.unblock));
+apiRouter.patch("/devices/:id/reject", requireAdmin, asyncHandler(device.reject));
+apiRouter.post("/devices/:id/logout", requireAdmin, asyncHandler(device.logout));
+apiRouter.delete("/devices/:id", requireAdmin, asyncHandler(device.remove));
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 apiRouter.get("/settings", asyncHandler(settings.get));

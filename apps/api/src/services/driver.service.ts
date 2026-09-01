@@ -5,6 +5,9 @@ import { bogotaDayRange, todayBogota } from "../lib/date-range";
 import { BANK_LINKED_PAYMENT_NOTE, bankLinkedBaseNote } from "../lib/balance-markers";
 import { reconcileBasePending } from "../lib/base-balance";
 
+// Usuario + equipo (PC) que hace la acción. Compatible con lo que devuelve getActor(req).
+type ActorLike = { id?: string | null; name?: string | null; deviceId?: string | null; deviceName?: string | null };
+
 /**
  * Aplica un cambio en la cuenta de un domiciliario manteniendo SIEMPRE el
  * invariante de que deuda y crédito NO sean ambos positivos a la vez.
@@ -98,7 +101,7 @@ export async function getDriverDetail(id: string) {
   return driver;
 }
 
-export async function registerPayment(driverId: string, amount: number, medium: "cash" | "bank", notes?: string, actor?: { id?: string | null; name?: string | null }) {
+export async function registerPayment(driverId: string, amount: number, medium: "cash" | "bank", notes?: string, actor?: ActorLike) {
   if (!amount || amount <= 0) throw badRequest("Monto inválido");
   if (medium !== "cash" && medium !== "bank") throw badRequest("Medio de pago inválido (cash o bank)");
   const driver = await prisma.driver.findUnique({ where: { id: driverId } });
@@ -142,6 +145,8 @@ export async function registerPayment(driverId: string, amount: number, medium: 
         driverName: driver.name,
         createdBy: actor?.id ?? null,
         createdByName: actor?.name ?? null,
+        deviceId: actor?.deviceId ?? null,
+        deviceName: actor?.deviceName ?? null,
         noCounterpart: true,
         // Este ingreso ES el pago: reduce la posición neta del domiciliario en `amount`.
         debtApplied: amount,
@@ -161,6 +166,8 @@ export async function registerPayment(driverId: string, amount: number, medium: 
           notes: `${bankLinkedBaseNote(medium)} · Devolución de base${notes ? ` · ${notes}` : ""}`,
           createdBy: actor?.id ?? null,
           createdByName: actor?.name ?? null,
+          deviceId: actor?.deviceId ?? null,
+          deviceName: actor?.deviceName ?? null,
           bankTransactionId: bankTx.id,
         },
       });
@@ -177,6 +184,8 @@ export async function registerPayment(driverId: string, amount: number, medium: 
           notes: `${BANK_LINKED_PAYMENT_NOTE} · Pago de comisión${notes ? ` · ${notes}` : ""}`,
           createdBy: actor?.id ?? null,
           createdByName: actor?.name ?? null,
+          deviceId: actor?.deviceId ?? null,
+          deviceName: actor?.deviceName ?? null,
           bankTransactionId: bankTx.id,
         },
       });
@@ -260,7 +269,7 @@ export async function getDriverStatement(id: string) {
 export async function applyBankToDriver(
   bankTxId: string,
   driverId: string,
-  actor?: { id?: string | null; name?: string | null }
+  actor?: ActorLike
 ) {
   const [bankTx, driver] = await Promise.all([
     prisma.bankTransaction.findUnique({ where: { id: bankTxId } }),
@@ -346,6 +355,8 @@ export async function applyBankToDriver(
           notes: bankLinkedBaseNote(medium),
           createdBy: actor?.id ?? null,
           createdByName: actor?.name ?? null,
+          deviceId: actor?.deviceId ?? null,
+          deviceName: actor?.deviceName ?? null,
           bankTransactionId: bankTxId,
         },
       });
@@ -360,6 +371,8 @@ export async function applyBankToDriver(
           notes: BANK_LINKED_PAYMENT_NOTE,
           createdBy: actor?.id ?? null,
           createdByName: actor?.name ?? null,
+          deviceId: actor?.deviceId ?? null,
+          deviceName: actor?.deviceName ?? null,
           bankTransactionId: bankTxId,
         },
       });
@@ -406,7 +419,7 @@ export async function applyBankToDriver(
 export async function payCredit(
   driverId: string,
   medium: "cash" | "bank",
-  actor?: { id?: string | null; name?: string | null }
+  actor?: ActorLike
 ) {
   const driver = await prisma.driver.findUnique({ where: { id: driverId } });
   if (!driver) throw notFound("Domiciliario no encontrado");
@@ -425,6 +438,8 @@ export async function payCredit(
         driverName: driver.name,
         createdBy: actor?.id ?? null,
         createdByName: actor?.name ?? null,
+        deviceId: actor?.deviceId ?? null,
+        deviceName: actor?.deviceName ?? null,
       },
     });
     // Cerrar el crédito

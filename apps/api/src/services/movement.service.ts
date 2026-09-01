@@ -28,6 +28,8 @@ export async function addMovement(input: CreateMovementRequest): Promise<Movemen
       taxAmount: (input as unknown as { taxAmount?: number }).taxAmount ?? null,
       createdBy: (input as unknown as { createdBy?: string }).createdBy ?? null,
       createdByName: (input as unknown as { createdByName?: string }).createdByName ?? null,
+      deviceId: (input as unknown as { deviceId?: string }).deviceId ?? null,
+      deviceName: (input as unknown as { deviceName?: string }).deviceName ?? null,
     },
   });
   return toMovement(row);

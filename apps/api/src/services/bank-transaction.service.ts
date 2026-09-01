@@ -28,6 +28,8 @@ export async function create(data: {
   date?: string;
   createdBy?: string | null;
   createdByName?: string | null;
+  deviceId?: string | null;
+  deviceName?: string | null;
   // Si se registra como contraparte de otro movimiento, su id va aquí para enlazarlos.
   pairWith?: string;
   // Marca explícita: este movimiento NO requiere contraparte (es independiente).
@@ -90,6 +92,8 @@ export async function create(data: {
     date: when,
     createdBy: data.createdBy ?? null,
     createdByName: data.createdByName ?? null,
+    deviceId: data.deviceId ?? null,
+    deviceName: data.deviceName ?? null,
     pairId,
     noCounterpart: data.noCounterpart === true,
   };

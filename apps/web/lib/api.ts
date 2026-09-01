@@ -1,6 +1,8 @@
 // Cliente HTTP del frontend. En el modelo host (un solo puerto) usa rutas
 // relativas (/api). En desarrollo, NEXT_PUBLIC_API_URL apunta a http://localhost:4000.
 
+import { getDeviceId } from "./device-id";
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 const TOKEN_KEY = "cashbuddy.token";
@@ -63,6 +65,9 @@ export async function api<T>(path: string, opts: Options = {}): Promise<T> {
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
+  // Identificador de equipo (PC) para trazabilidad y autorización de equipos.
+  const deviceId = getDeviceId();
+  if (deviceId) headers["X-Device-Id"] = deviceId;
 
   const res = await fetch(`${BASE}/api${path}`, {
     method,

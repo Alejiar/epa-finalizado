@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
+import { DeviceGate } from "@/components/DeviceGate";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -21,5 +22,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <AppShell>{children}</AppShell>;
+  return (
+    <DeviceGate>
+      <AppShell>{children}</AppShell>
+    </DeviceGate>
+  );
 }

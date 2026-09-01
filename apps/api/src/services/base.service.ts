@@ -81,7 +81,7 @@ export async function listBases(branchId?: string, driverId?: string, from?: str
 }
 
 // Acepta split efectivo/transferencia combinable. amount = cash + bank.
-export async function giveBase(driverId: string, input: { cashAmount?: number; bankAmount?: number; amount?: number; notes?: string; createdBy?: string | null; createdByName?: string | null }) {
+export async function giveBase(driverId: string, input: { cashAmount?: number; bankAmount?: number; amount?: number; notes?: string; createdBy?: string | null; createdByName?: string | null; deviceId?: string | null; deviceName?: string | null }) {
   const driver = await prisma.driver.findUnique({ where: { id: driverId } });
   if (!driver) throw notFound("Domiciliario no encontrado");
   const cashAmount = Math.round(input.cashAmount ?? 0);
@@ -91,7 +91,7 @@ export async function giveBase(driverId: string, input: { cashAmount?: number; b
 
   const tx = await prisma.$transaction(async (txc) => {
     const created = await txc.baseTransaction.create({
-      data: { driverId, branchId: driver.branchId, amount, cashAmount, bankAmount, type: "entrega", notes: input.notes, createdBy: input.createdBy ?? null, createdByName: input.createdByName ?? null },
+      data: { driverId, branchId: driver.branchId, amount, cashAmount, bankAmount, type: "entrega", notes: input.notes, createdBy: input.createdBy ?? null, createdByName: input.createdByName ?? null, deviceId: input.deviceId ?? null, deviceName: input.deviceName ?? null },
     });
     // Entregar base aumenta lo que debe, neteando contra cualquier crédito a favor.
     await applyDebtDelta(txc, driverId, amount);
@@ -100,7 +100,7 @@ export async function giveBase(driverId: string, input: { cashAmount?: number; b
   return tx;
 }
 
-export async function payBase(driverId: string, input: { cashAmount?: number; bankAmount?: number; amount?: number; notes?: string; createdBy?: string | null; createdByName?: string | null }) {
+export async function payBase(driverId: string, input: { cashAmount?: number; bankAmount?: number; amount?: number; notes?: string; createdBy?: string | null; createdByName?: string | null; deviceId?: string | null; deviceName?: string | null }) {
   const driver = await prisma.driver.findUnique({ where: { id: driverId } });
   if (!driver) throw notFound("Domiciliario no encontrado");
   const cashAmount = Math.round(input.cashAmount ?? 0);
@@ -128,7 +128,7 @@ export async function payBase(driverId: string, input: { cashAmount?: number; ba
 
   const tx = await prisma.$transaction(async (txc) => {
     const created = await txc.baseTransaction.create({
-      data: { driverId, branchId: driver.branchId, amount, cashAmount, bankAmount, type: "pago", notes: input.notes, createdBy: input.createdBy ?? null, createdByName: input.createdByName ?? null },
+      data: { driverId, branchId: driver.branchId, amount, cashAmount, bankAmount, type: "pago", notes: input.notes, createdBy: input.createdBy ?? null, createdByName: input.createdByName ?? null, deviceId: input.deviceId ?? null, deviceName: input.deviceName ?? null },
     });
     // Devolver base reduce la deuda; si excede, queda como crédito (no deuda negativa).
     await applyDebtDelta(txc, driverId, -amount);

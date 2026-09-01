@@ -158,6 +158,8 @@ export async function registerShift(
   const medium = input.medium === "bank" ? "bank" : "cash";
   const actorId = input.actor?.id ?? null;
   const actorName = input.actor?.name ?? null;
+  const deviceId = input.actor?.deviceId ?? null;
+  const deviceName = input.actor?.deviceName ?? null;
 
   return prisma.$transaction(async (tx) => {
     const shift = await tx.hourlyShift.create({
@@ -195,6 +197,8 @@ export async function registerShift(
           noCounterpart: true,
           createdBy: actorId,
           createdByName: actorName,
+          deviceId,
+          deviceName,
           date: new Date(),
         },
       });
@@ -301,6 +305,8 @@ export async function payClient(
           noCounterpart: true,
           createdBy: input.actor?.id ?? null,
           createdByName: input.actor?.name ?? null,
+          deviceId: input.actor?.deviceId ?? null,
+          deviceName: input.actor?.deviceName ?? null,
           date: new Date(),
         },
       });

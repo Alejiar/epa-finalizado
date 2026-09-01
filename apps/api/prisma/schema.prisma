@@ -190,6 +190,8 @@ model Movement {
   taxAmount      Int?
   createdBy      String?
   createdByName  String?
+  deviceId       String? // PC (Device.id) que registró el movimiento
+  deviceName     String? // nombre del PC en ese momento (snapshot, para mostrar inline)
   approvedBy     String?
   approvedByName String?
   approvedAt     DateTime?
@@ -312,6 +314,8 @@ model BaseTransaction {
   notes             String?
   createdBy         String?
   createdByName     String?
+  deviceId          String? // PC (Device.id) que registró la base
+  deviceName        String? // nombre del PC en ese momento (snapshot)
   date              DateTime @default(now())
   // Vínculo directo al BankTransaction que originó este registro (pago vía banco
   // aplicado a la deuda). Antes se buscaba por fecha aproximada (±5s), lo que
@@ -344,6 +348,8 @@ model DriverPayment {
   notes             String?
   createdBy         String?
   createdByName     String?
+  deviceId          String? // PC (Device.id) que registró el pago
+  deviceName        String? // nombre del PC en ese momento (snapshot)
   date              DateTime @default(now())
   // Ver comentario en BaseTransaction.bankTransactionId.
   bankTransactionId String?
@@ -365,6 +371,8 @@ model Conversion {
   notes      String?
   userId     String?
   userName   String?
+  deviceId   String? // PC (Device.id) que registró la conversión
+  deviceName String? // nombre del PC en ese momento (snapshot)
   driverId   String? // domiciliario asociado (opcional)
   driverName String? // nombre cacheado para historial
   date       DateTime       @default(now())
@@ -465,8 +473,12 @@ model ClientDebt {
   paidBank      Int       @default(0)
   createdBy     String?
   createdByName String?
+  deviceId      String? // PC (Device.id) que creó la deuda
+  deviceName    String? // nombre del PC al crearla (snapshot)
   paidBy        String?
   paidByName    String?
+  paidDeviceId   String? // PC que registró el cobro
+  paidDeviceName String? // nombre del PC al cobrar (snapshot)
   createdAt     DateTime  @default(now())
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -502,6 +514,8 @@ model BankTransaction {
   hourlyShiftId String?
   createdBy     String?
   createdByName String?
+  deviceId      String? // PC (Device.id) que registró el movimiento
+  deviceName    String? // nombre del PC en ese momento (snapshot)
   date          DateTime   @default(now())
   createdAt     DateTime   @default(now())
 
@@ -621,4 +635,63 @@ model HourlyShift {
   @@index([hourlyClientId])
   @@index([hourlyClientId, driverPaid])
   @@index([hourlyClientId, paid])
+}
+
+// ============================================================
+// Dispositivos (PCs) y bitácora de actividad
+// ============================================================
+
+enum DeviceStatus {
+  pending // recién visto, aún sin autorizar: NO puede operar ni ver datos
+  approved // autorizado por un admin (y con nombre): opera normal
+  blocked // rechazado/bloqueado por un admin: no puede operar
+}
+
+// Un PC (navegador) que se conecta al sistema. El `id` es un UUID que genera el propio
+// navegador y guarda en localStorage, y que manda en cada request (header X-Device-Id).
+// La identidad es "por navegador": si borran los datos del navegador, aparece un Device
+// nuevo en `pending` (a propósito — el admin lo reautoriza y renombra). El PC servidor
+// (loopback) se auto-aprueba para que el admin nunca quede bloqueado (ver device.service).
+model Device {
+  id                String       @id // UUID del navegador (X-Device-Id); NO @default: lo fija el cliente
+  name              String? // nombre que le pone el admin ("PC 1"); null = sin nombre (solo mientras pending)
+  status            DeviceStatus @default(pending)
+  trusted           Boolean      @default(false) // auto-aprobado por ser el PC servidor (loopback)
+  firstUserId       String? // primer usuario que lo usó (trazabilidad)
+  firstUserName     String?
+  lastUserName      String? // último usuario visto en este PC
+  firstSeenIp       String?
+  lastSeenIp        String?
+  userAgent         String?      @db.Text
+  approvedBy        String?
+  approvedByName    String?
+  approvedAt        DateTime?
+  // Señal de UNA sola vez para "Cerrar sistema": el PC, en su próximo sondeo, ve este
+  // valor más nuevo que su último logout y se va al login. No bloquea (sigue approved).
+  logoutRequestedAt DateTime?
+  lastSeenAt        DateTime     @default(now())
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([status])
+  @@index([lastSeenAt])
+}
+
+// Bitácora: una fila por cada acción que CAMBIA datos (POST/PATCH/DELETE), con el PC y el
+// usuario que la hizo. Es la fuente de "ver desde qué PC se hace cada movimiento" a nivel
+// global (la etiqueta inline en Movimientos usa los campos deviceName de cada registro).
+model ActivityLog {
+  id         String   @id @default(cuid())
+  deviceId   String? // id del Device (no FK: la bitácora sobrevive aunque se borre el Device)
+  deviceName String? // nombre del PC en el momento de la acción (snapshot)
+  userId     String?
+  userName   String?
+  method     String // POST | PATCH | DELETE
+  path       String // ruta del endpoint, p. ej. /bank-transactions
+  action     String? // resumen legible opcional
+  statusCode Int?
+  createdAt  DateTime @default(now())
+
+  @@index([deviceId])
+  @@index([createdAt])
 }

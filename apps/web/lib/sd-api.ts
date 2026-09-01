@@ -6,14 +6,17 @@
 // leyendo localStorage, y al cambiar el almacenamiento del token en un solo lado las
 // dos mitades de la app habrían quedado con sesiones distintas.
 import { getToken, setToken } from "./api";
+import { getDeviceId } from "./device-id";
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
+  const deviceId = getDeviceId();
   const res = await fetch(`/api${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(deviceId ? { "X-Device-Id": deviceId } : {}),
       ...(init.headers ?? {}),
     },
   });
@@ -206,6 +209,7 @@ export interface UnifiedBankMovement {
   branchName?: string;
   driverName?: string;
   createdByName?: string | null;
+  deviceName?: string | null; // PC desde el que se registró
   groupId?: string | null;
   pairId?: string | null;
   noCounterpart?: boolean;
@@ -245,6 +249,7 @@ export async function getUnifiedBankMovements(params?: { from?: string; to?: str
     reference: t.reference,
     driverName: t.driverName,
     createdByName: t.createdByName,
+    deviceName: t.deviceName,
     pairId: t.pairId,
     noCounterpart: t.noCounterpart,
     date: t.date,
@@ -256,7 +261,7 @@ export async function getUnifiedBankMovements(params?: { from?: string; to?: str
     if (parts.length === 1) {
       // Mitad huérfana (no debería pasar): tratarla como simple.
       const t = parts[0];
-      fromTxs.push({ id: t.id, type: t.type as BankMovementType, medium: t.medium ?? "bank", amount: t.amount, description: t.description, reference: t.reference, driverName: t.driverName, createdByName: t.createdByName, groupId, pairId: t.pairId, noCounterpart: t.noCounterpart, date: t.date, source: "bank" });
+      fromTxs.push({ id: t.id, type: t.type as BankMovementType, medium: t.medium ?? "bank", amount: t.amount, description: t.description, reference: t.reference, driverName: t.driverName, createdByName: t.createdByName, deviceName: t.deviceName, groupId, pairId: t.pairId, noCounterpart: t.noCounterpart, date: t.date, source: "bank" });
       continue;
     }
     const cashPart = parts.find(p => p.medium === "cash")?.amount ?? 0;
@@ -270,6 +275,7 @@ export async function getUnifiedBankMovements(params?: { from?: string; to?: str
       reference: head.reference,
       driverName: head.driverName,
       createdByName: head.createdByName,
+      deviceName: head.deviceName,
       groupId,
       pairId: head.pairId,
       noCounterpart: head.noCounterpart,
@@ -291,6 +297,7 @@ export async function getUnifiedBankMovements(params?: { from?: string; to?: str
     branchId: c.branchId,
     branchName: c.branch?.name,
     driverName: c.driverName,
+    deviceName: c.deviceName,
     date: c.date,
     source: "conversion" as const,
   }));
@@ -312,6 +319,7 @@ export interface UnifiedMovement {
   source: string;
   relatedName?: string;
   createdByName?: string | null;
+  deviceName?: string | null; // PC desde el que se registró
   entityType: string;
   entityId: string;
   editableDescription: boolean;
@@ -323,6 +331,68 @@ export const getUnifiedMovements = (params?: { from?: string; to?: string; limit
   );
   return apiFetch<UnifiedMovement[]>(`/movements/unified${q.toString() ? "?" + q : ""}`);
 };
+
+// ─── Equipos (PCs): identificación y autorización ─────────────────────────────
+
+export type DeviceStatus = "pending" | "approved" | "blocked";
+
+// Estado del propio equipo (para el "gate" del frontend).
+export interface MyDevice {
+  id: string | null;
+  status: DeviceStatus;
+  name: string | null;
+  trusted: boolean;
+  allowed: boolean;
+  code: string | null;
+  logoutRequestedAt: string | null;
+}
+
+// Equipo tal como lo ve el admin en la página "Equipos".
+export interface Device {
+  id: string;
+  name: string | null;
+  status: DeviceStatus;
+  trusted: boolean;
+  firstUserName: string | null;
+  lastUserName: string | null;
+  firstSeenIp: string | null;
+  lastSeenIp: string | null;
+  approvedByName: string | null;
+  approvedAt: string | null;
+  logoutRequestedAt: string | null;
+  lastSeenAt: string;
+  createdAt: string;
+}
+
+export interface DeviceActivity {
+  id: string;
+  deviceId: string | null;
+  deviceName: string | null;
+  userName: string | null;
+  method: string;
+  path: string;
+  statusCode: number | null;
+  createdAt: string;
+}
+
+export const getMyDevice = () => apiFetch<MyDevice>("/devices/me");
+export const getDevices = () => apiFetch<{ devices: Device[]; pendingCount: number }>("/devices");
+export const getDevicePendingCount = () => apiFetch<{ count: number }>("/devices/pending-count");
+export const getDeviceActivity = (deviceId?: string, limit?: number) => {
+  const q = new URLSearchParams();
+  if (deviceId) q.set("deviceId", deviceId);
+  if (limit) q.set("limit", String(limit));
+  return apiFetch<DeviceActivity[]>(`/devices/activity${q.toString() ? "?" + q : ""}`);
+};
+export const approveDevice = (id: string, name: string) =>
+  apiFetch<Device>(`/devices/${id}/approve`, { method: "PATCH", body: JSON.stringify({ name }) });
+export const renameDevice = (id: string, name: string) =>
+  apiFetch<Device>(`/devices/${id}/rename`, { method: "PATCH", body: JSON.stringify({ name }) });
+export const blockDevice = (id: string) => apiFetch<Device>(`/devices/${id}/block`, { method: "PATCH" });
+export const unblockDevice = (id: string) => apiFetch<Device>(`/devices/${id}/unblock`, { method: "PATCH" });
+export const rejectDevice = (id: string) => apiFetch<Device>(`/devices/${id}/reject`, { method: "PATCH" });
+export const requestDeviceLogout = (id: string) => apiFetch<Device>(`/devices/${id}/logout`, { method: "POST" });
+export const deleteDevice = (id: string) => apiFetch<void>(`/devices/${id}`, { method: "DELETE" });
 
 // ─── URL de acceso local ──────────────────────────────────────────────────────
 
@@ -530,6 +600,7 @@ export interface Conversion {
   notes?: string;
   driverId?: string;
   driverName?: string;
+  deviceName?: string | null; // PC desde el que se registró
   date: string;
   branch?: { id: string; name: string };
 }
@@ -724,6 +795,7 @@ export interface BankTransaction {
   driverId?: string;
   driverName?: string;
   createdByName?: string | null;
+  deviceName?: string | null; // PC desde el que se registró
   groupId?: string | null;
   pairId?: string | null;
   noCounterpart?: boolean;

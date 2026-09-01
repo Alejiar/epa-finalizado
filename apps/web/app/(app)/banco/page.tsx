@@ -252,6 +252,7 @@ export default function BancoPage() {
                         {isMixed ? ` · 💵 ${formatCOP(m.cashPart ?? 0)} efectivo + 🏦 ${formatCOP(m.bankPart ?? 0)} transferencia` : ""}
                         {!isMixed && m.medium ? ` · ${m.type === "ingreso" || m.type === "consignacion" ? "Entró" : "Salió"} por ${m.medium === "cash" ? "efectivo" : "transferencia"}` : ""}
                         {m.createdByName ? ` · 👤 Registró: ${m.createdByName}` : ""}
+                        {m.deviceName ? ` · 🖥️ ${m.deviceName}` : ""}
                         {m.reference ? ` · Ref: ${m.reference}` : ""}{m.branchName ? ` · ${m.branchName}` : ""}
                       </p>
                     </div>

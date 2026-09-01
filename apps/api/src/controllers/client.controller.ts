@@ -33,7 +33,7 @@ export async function addDebt(req: Request, res: Response) {
 
 export async function payDebt(req: Request, res: Response) {
   const { paidAmount } = req.body;
-  res.json(await svc.payDebt(req.params.id, paidAmount));
+  res.json(await svc.payDebt(req.params.id, paidAmount, getActor(req)));
 }
 
 export async function payClient(req: Request, res: Response) {

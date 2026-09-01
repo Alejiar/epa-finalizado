@@ -21,7 +21,7 @@ import type {
   Settings,
   Worker,
 } from "@cash-buddy/shared";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { useAuth } from "./auth";
 
 // Re-exporta tipos y cálculo compartido para compatibilidad con el código portado.
@@ -109,7 +109,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     loadedRef.current = true;
     setLoading(true);
     reloadAll()
-      .catch((e) => toast.error(e?.message ?? "Error al cargar datos"))
+      // Un 403 al arrancar = equipo pendiente/bloqueado; lo maneja DeviceGate con su pantalla.
+      // No mostramos toast rojo encima de "esperando autorización".
+      .catch((e) => { if (!(e instanceof ApiError && e.status === 403)) toast.error(e?.message ?? "Error al cargar datos"); })
       .finally(() => setLoading(false));
   }, [user, reloadAll]);
 

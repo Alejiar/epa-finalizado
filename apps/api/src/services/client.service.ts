@@ -1,6 +1,9 @@
 import { prisma } from "../lib/prisma";
 import { notFound } from "../lib/errors";
 
+// Usuario + equipo (PC) que hace la acción. Compatible con getActor(req).
+type ActorLike = { id?: string | null; name?: string | null; deviceId?: string | null; deviceName?: string | null };
+
 export async function listClients(activeOnly = false) {
   return prisma.client.findMany({
     where: activeOnly ? { active: true } : undefined,
@@ -74,10 +77,10 @@ export async function updateClient(id: string, data: Partial<{
   return prisma.client.update({ where: { id }, data });
 }
 
-export async function addDebt(clientId: string, description: string, amount: number, date?: string, actor?: { id?: string | null; name?: string | null }, medium?: "cash" | "bank" | null) {
+export async function addDebt(clientId: string, description: string, amount: number, date?: string, actor?: ActorLike, medium?: "cash" | "bank" | null) {
   const [debt] = await prisma.$transaction([
     prisma.clientDebt.create({
-      data: { clientId, description, amount, medium: medium ?? null, createdBy: actor?.id ?? null, createdByName: actor?.name ?? null, ...(date ? { createdAt: new Date(date + "T12:00:00") } : {}) },
+      data: { clientId, description, amount, medium: medium ?? null, createdBy: actor?.id ?? null, createdByName: actor?.name ?? null, deviceId: actor?.deviceId ?? null, deviceName: actor?.deviceName ?? null, ...(date ? { createdAt: new Date(date + "T12:00:00") } : {}) },
     }),
     prisma.client.update({
       where: { id: clientId },
@@ -87,7 +90,7 @@ export async function addDebt(clientId: string, description: string, amount: num
   return debt;
 }
 
-export async function payDebt(debtId: string, paidAmount?: number) {
+export async function payDebt(debtId: string, paidAmount?: number, actor?: ActorLike) {
   const debt = await prisma.clientDebt.findUnique({ where: { id: debtId } });
   if (!debt) throw notFound("Deuda no encontrada");
   if (debt.paid) throw new Error("Esta deuda ya fue pagada");
@@ -113,6 +116,10 @@ export async function payDebt(debtId: string, paidAmount?: number) {
         // en el saldo (dinero cobrado que "no aparecía").
         paidAt: new Date(),
         paidAmount: newPaidAmount,
+        paidBy: actor?.id ?? null,
+        paidByName: actor?.name ?? null,
+        paidDeviceId: actor?.deviceId ?? null,
+        paidDeviceName: actor?.deviceName ?? null,
       },
     }),
     prisma.client.update({
@@ -133,7 +140,7 @@ export async function registerClientPayment(
   amount: number,
   payAll = false,
   medium: "cash" | "bank" = "cash",
-  opts?: { cashAmount?: number; bankAmount?: number; actor?: { id?: string | null; name?: string | null } },
+  opts?: { cashAmount?: number; bankAmount?: number; actor?: ActorLike },
 ) {
   const client = await prisma.client.findUnique({ where: { id: clientId } });
   if (!client) throw notFound("Cliente no encontrado");
@@ -184,6 +191,8 @@ export async function registerClientPayment(
           paidAt: new Date(),
           paidBy: opts?.actor?.id ?? null,
           paidByName: opts?.actor?.name ?? null,
+          paidDeviceId: opts?.actor?.deviceId ?? null,
+          paidDeviceName: opts?.actor?.deviceName ?? null,
           ...(cashPart > 0 ? { paidCash: { increment: cashPart } } : {}),
           ...(bankPart > 0 ? { paidBank: { increment: bankPart } } : {}),
         },

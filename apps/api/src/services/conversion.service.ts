@@ -21,6 +21,8 @@ export async function createConversion(input: {
   notes?: string;
   userId?: string;
   userName?: string;
+  deviceId?: string | null;
+  deviceName?: string | null;
   driverId?: string;
   date?: string;
 }) {
@@ -43,6 +45,8 @@ export async function createConversion(input: {
       notes: input.notes,
       userId: input.userId,
       userName: input.userName,
+      deviceId: input.deviceId ?? null,
+      deviceName: input.deviceName ?? null,
       driverId: input.driverId,
       driverName,
       date: input.date ? new Date(input.date) : new Date(),

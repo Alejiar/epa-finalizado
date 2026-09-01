@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Truck, Package, FileText, Landmark, Lock, History,
-  Users, UserCircle, BarChart3, Settings, LogOut, Banknote, AlertTriangle, Receipt, Bell, X, NotebookPen,
+  Users, UserCircle, BarChart3, Settings, LogOut, Banknote, AlertTriangle, Receipt, Bell, X, NotebookPen, Monitor,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
@@ -29,14 +29,16 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const isAdmin = user?.role === "admin";
   const [pendingRequests, setPendingRequests] = useState(0);
   const [pendingExpenses, setPendingExpenses] = useState(0);
+  const [pendingDevices, setPendingDevices] = useState(0);
 
-  // Notificaciones del admin: solicitudes de cambio + gastos pendientes por aprobar
+  // Notificaciones del admin: solicitudes de cambio + gastos pendientes + equipos por autorizar
   // Poll cada 8s para que sea casi en vivo entre varios PCs.
   useEffect(() => {
     if (!isAdmin) return;
     const loadCount = () => {
       api.getEditRequestCount().then(r => setPendingRequests(r.count)).catch(() => {});
       api.getPendingMovements().then(m => setPendingExpenses(m.length)).catch(() => {});
+      api.getDevicePendingCount().then(r => setPendingDevices(r.count)).catch(() => {});
     };
     loadCount();
     const onVis = () => { if (document.visibilityState === "visible") loadCount(); };
@@ -73,6 +75,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         { to: "/trabajadores", icon: Users, label: "Trabajadores" },
         { to: "/clientes", icon: UserCircle, label: "Clientes" },
         { to: "/solicitudes", icon: Bell, label: "Solicitudes", adminOnly: true, badge: pendingRequests },
+        { to: "/equipos", icon: Monitor, label: "Equipos", adminOnly: true, badge: pendingDevices },
         { to: "/shipday/reportes", icon: BarChart3, label: "Reportes" },
         { to: "/configuracion", icon: Settings, label: "Configuración" },
       ],

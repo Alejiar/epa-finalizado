@@ -15,6 +15,7 @@ export interface UnifiedMovement {
   source: string;        // sistema origen
   relatedName?: string;  // nombre de persona/cliente asociado
   createdByName?: string | null; // usuario que REALIZÓ el movimiento
+  deviceName?: string | null;    // PC desde el que se registró (etiqueta inline)
   entityType: string;    // modelo real para solicitudes de cambio
   entityId: string;      // ID real del registro
   editableDescription: boolean; // si el campo descripción es editable
@@ -107,6 +108,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Caja",
       relatedName: m.worker?.name,
       createdByName: m.createdByName,
+      deviceName: m.deviceName,
       entityType: "Movement",
       entityId: m.id,
       editableDescription: true,
@@ -128,6 +130,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Banco",
       relatedName: t.driverName ?? t.reference ?? undefined,
       createdByName: t.createdByName,
+      deviceName: t.deviceName,
       entityType: "BankTransaction",
       entityId: t.id,
       editableDescription: true,
@@ -150,6 +153,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Conversión",
       relatedName: c.driverName ?? c.branch?.name,
       createdByName: c.userName,
+      deviceName: c.deviceName,
       entityType: "Conversion",
       entityId: c.id,
       editableDescription: false,
@@ -174,6 +178,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Domiciliarios",
       relatedName: p.driver?.name,
       createdByName: p.createdByName,
+      deviceName: p.deviceName,
       entityType: "DriverPayment",
       entityId: p.id,
       editableDescription: false,
@@ -198,6 +203,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Bases",
       relatedName: b.driver?.name,
       createdByName: b.createdByName,
+      deviceName: b.deviceName,
       entityType: "BaseTransaction",
       entityId: b.id,
       editableDescription: false,
@@ -219,6 +225,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Clientes",
       relatedName: d.client?.name,
       createdByName: d.createdByName,
+      deviceName: d.deviceName,
       entityType: "ClientDebt",
       entityId: d.id,
       editableDescription: false,
@@ -241,6 +248,7 @@ export async function getUnifiedMovements(params?: { from?: string; to?: string;
       source: "Clientes",
       relatedName: d.client?.name,
       createdByName: d.paidByName ?? d.createdByName,
+      deviceName: d.paidDeviceName ?? d.deviceName,
       // Tipo propio (no "ClientDebt"): al eliminar este movimiento se REVIERTE el
       // cobro y la deuda vuelve a su valor real, en vez de borrar la deuda entera.
       entityType: "ClientDebtPayment",

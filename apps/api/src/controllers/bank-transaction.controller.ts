@@ -10,7 +10,7 @@ export async function list(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const actor = getActor(req);
-  res.status(201).json(await svc.create({ ...req.body, createdBy: actor.id, createdByName: actor.name }));
+  res.status(201).json(await svc.create({ ...req.body, createdBy: actor.id, createdByName: actor.name, deviceId: actor.deviceId, deviceName: actor.deviceName }));
 }
 
 export async function remove(req: Request, res: Response) {

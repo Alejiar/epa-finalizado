@@ -167,6 +167,7 @@ export default function MovimientosPage() {
                 </p>
                 <p className="text-[11px] text-muted-foreground/80">
                   👤 Realizado por: <span className="font-semibold">{m.createdByName ?? "—"}</span>
+                  {m.deviceName ? <> {"·"} 🖥️ <span className="font-semibold">{m.deviceName}</span></> : ""}
                 </p>
               </div>
 
